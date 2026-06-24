@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>E.R.T.H | Employee Route Tracking Hub</title>
+  <meta name="description" content="E.R.T.H - Employee Route Tracking Hub for cab routing, approvals, live trip visibility, and driver operations." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./css/main.css" />
+  <script defer src="./js/app.js"></script>
+</head>
+<body data-page="auth">
+  <div class="page-shell auth-shell">
+    <header class="site-header">
+      <div class="logo-mark">H</div>
+      <div class="header-info">
+        <div class="day-display">Wednesday</div>
+        <div class="date-display">Tenth of November</div>
+      </div>
+    </header>
+
+    <main class="landing-hero landing-panel">
+      <div class="landing-hero-inner">
+        <h1 class="hero-title">E.R.T.H.</h1>
+        <p class="hero-copy">
+          Employee Routing and Tracking Hub for cab routing, approvals, live trip visibility, and driver operations.
+        </p>
+        <div class="hero-actions">
+          <a class="primary-button" href="./pages/employee.html">Enter as User</a>
+          <a class="primary-button" href="./pages/admin.html">Open Admin</a>
+          <a class="primary-button" href="./pages/driver.html">Open Driver</a>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    // Update date and day display
+    function updateDateDisplay() {
+      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+      const today = new Date();
+      
+      const dayName = days[today.getDay()];
+      const monthName = months[today.getMonth()];
+      const date = today.getDate();
+      
+      // Format date as ordinal
+      const getOrdinal = (n) => {
+        const s = ["th","st","nd","rd"];
+        const v = n % 100;
+        return n + (s[(v - 20) % 10] || s[v] || s[0]);
+      };
+      
+      document.querySelector('.day-display').textContent = dayName;
+      document.querySelector('.date-display').textContent = `${getOrdinal(date)} of ${monthName}`;
+    }
+    
+    updateDateDisplay();
+  </script>
+</body>
+</html>
