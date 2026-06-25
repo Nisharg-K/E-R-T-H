@@ -1,0 +1,48 @@
+{
+  "users": [
+    {
+      "id": "admin-id-123",
+      "full_name": "System Administrator",
+      "email": "admin@aditiconsulting.com",
+      "password": "admin123",
+      "role": "admin",
+      "status": "approved",
+      "mobile_number": "+1234567890",
+      "employee_id": "ADMIN-01",
+      "department": "IT"
+    },
+    {
+      "id": "employee-id-123",
+      "full_name": "Aditi Employee",
+      "email": "employee@aditiconsulting.com",
+      "password": "employee123",
+      "role": "employee",
+      "status": "approved",
+      "mobile_number": "+1987654321",
+      "employee_id": "EMP-001",
+      "department": "Engineering"
+    },
+    {
+      "id": "driver-id-123",
+      "full_name": "Aditi Driver",
+      "email": "driver@aditiconsulting.com",
+      "password": "driver123",
+      "role": "driver",
+      "status": "approved",
+      "mobile_number": "+1555666777",
+      "license_number": "DL-99999999"
+    },
+    {
+      "id": "c4a16dab-2650-42af-bdcb-ee1a0eb6c817",
+      "full_name": "Test Employee Approved",
+      "email": "test_emp@aditiconsulting.com",
+      "password": "password123",
+      "role": "employee",
+      "status": "approved",
+      "mobile_number": "1234567890",
+      "employee_id": "EMP-002",
+      "department": "HR",
+      "license_number": null
+    }
+  ]
+}

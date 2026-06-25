@@ -27,10 +27,85 @@
         <p class="hero-copy">
           Employee Routing and Tracking Hub for cab routing, approvals, live trip visibility, and driver operations.
         </p>
-        <div class="hero-actions">
-          <a class="primary-button" href="./pages/employee.html">Enter as User</a>
-          <a class="primary-button" href="./pages/admin.html">Open Admin</a>
-          <a class="primary-button" href="./pages/driver.html">Open Driver</a>
+        
+        <div class="auth-container">
+          <!-- Auth Tabs -->
+          <div class="auth-tabs">
+            <button type="button" class="tab-button active" onclick="switchTab('login')">Sign In</button>
+            <button type="button" class="tab-button" onclick="switchTab('signup')">Request Approval</button>
+          </div>
+
+          <!-- Sign In Panel -->
+          <div id="loginPanel" class="auth-panel">
+            <form id="loginForm" class="auth-form">
+              <div class="form-group">
+                <label for="loginEmail">Corporate Email</label>
+                <input id="loginEmail" name="email" type="email" placeholder="name@aditiconsulting.com" required />
+              </div>
+              <div class="form-group">
+                <label for="loginPassword">Password</label>
+                <input id="loginPassword" name="password" type="password" placeholder="••••••••" required />
+              </div>
+              <button type="submit" class="primary-button full-width">Sign In</button>
+              <div id="loginResult" class="form-result"></div>
+            </form>
+          </div>
+
+          <!-- Sign Up / Request Approval Panel -->
+          <div id="signupPanel" class="auth-panel" style="display: none;">
+            <form id="signupForm" class="auth-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="signupName">Full Name</label>
+                  <input id="signupName" name="full_name" type="text" placeholder="John Doe" required />
+                </div>
+                <div class="form-group">
+                  <label for="signupEmail">Email Address</label>
+                  <input id="signupEmail" name="email" type="email" placeholder="name@aditiconsulting.com" required />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="signupPassword">Password</label>
+                  <input id="signupPassword" name="password" type="password" placeholder="Min. 6 chars" required />
+                </div>
+                <div class="form-group">
+                  <label for="signupMobile">Mobile Number</label>
+                  <input id="signupMobile" name="mobile_number" type="tel" placeholder="+91 98765 43210" required />
+                </div>
+              </div>
+              
+              <div class="form-group">
+                <label for="signupRole">Registering As</label>
+                <select id="signupRole" name="role" onchange="toggleRoleFields()" required>
+                  <option value="employee" selected>Employee (User)</option>
+                  <option value="driver">Cab Driver</option>
+                  <option value="admin">System Administrator</option>
+                </select>
+              </div>
+
+              <!-- Employee Specific Fields -->
+              <div id="employeeFields" class="form-row role-fields">
+                <div class="form-group">
+                  <label for="signupEmpId">Employee ID</label>
+                  <input id="signupEmpId" name="employee_id" type="text" placeholder="EMP-1049" />
+                </div>
+                <div class="form-group">
+                  <label for="signupDept">Department</label>
+                  <input id="signupDept" name="department" type="text" placeholder="Engineering" />
+                </div>
+              </div>
+
+              <!-- Driver Specific Fields -->
+              <div id="driverFields" class="form-group role-fields" style="display: none;">
+                <label for="signupLicense">Driving License Number</label>
+                <input id="signupLicense" name="license_number" type="text" placeholder="DL-GJ0620240001" />
+              </div>
+
+              <button type="submit" class="primary-button full-width">Request Account Approval</button>
+              <div id="signupResult" class="form-result"></div>
+            </form>
+          </div>
         </div>
       </div>
     </main>
@@ -58,6 +133,52 @@
     }
     
     updateDateDisplay();
+
+    // Tab switcher
+    function switchTab(tab) {
+      const loginPanel = document.getElementById('loginPanel');
+      const signupPanel = document.getElementById('signupPanel');
+      const buttons = document.querySelectorAll('.tab-button');
+      
+      if (tab === 'login') {
+        loginPanel.style.display = 'block';
+        signupPanel.style.display = 'none';
+        buttons[0].classList.add('active');
+        buttons[1].classList.remove('active');
+      } else {
+        loginPanel.style.display = 'none';
+        signupPanel.style.display = 'block';
+        buttons[0].classList.remove('active');
+        buttons[1].classList.add('active');
+      }
+    }
+
+    // Role-based fields visibility toggler
+    function toggleRoleFields() {
+      const role = document.getElementById('signupRole').value;
+      const employeeFields = document.getElementById('employeeFields');
+      const driverFields = document.getElementById('driverFields');
+      
+      employeeFields.style.display = 'none';
+      driverFields.style.display = 'none';
+      
+      document.getElementById('signupEmpId').required = false;
+      document.getElementById('signupDept').required = false;
+      document.getElementById('signupLicense').required = false;
+      
+      if (role === 'employee') {
+        employeeFields.style.display = 'flex';
+        document.getElementById('signupEmpId').required = true;
+        document.getElementById('signupDept').required = true;
+      } else if (role === 'driver') {
+        driverFields.style.display = 'block';
+        document.getElementById('signupLicense').required = true;
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      toggleRoleFields();
+    });
   </script>
 </body>
 </html>
