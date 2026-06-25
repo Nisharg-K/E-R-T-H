@@ -26,12 +26,50 @@ app.add_middleware(
 )
 
 # --- Database & Auth Scaffolding ---
-DB_FILE = "db.json"
+from pymongo import MongoClient
+
+def get_mongo_uri():
+    uri = os.environ.get("MGDB_CONNECTION_STRING")
+    if uri:
+        return uri
+    if os.path.exists(".env"):
+        with open(".env", "r") as f:
+            for line in f:
+                if line.strip().startswith("MGDB_CONNECTION_STRING"):
+                    parts = line.split("=", 1)
+                    if len(parts) == 2:
+                        return parts[1].strip()
+    return None
+
+MONGO_URI = get_mongo_uri()
+if not MONGO_URI:
+    raise RuntimeError("MGDB_CONNECTION_STRING not found in environment or .env file")
+
+client = MongoClient(MONGO_URI)
+db = client["erth"]
+users_col = db["users"]
+
+def clean_user(doc: dict) -> Optional[dict]:
+    if not doc:
+        return None
+    doc = dict(doc)
+    doc.pop("_id", None)
+    return doc
 
 def init_db():
-    if not os.path.exists(DB_FILE):
-        initial_data = {
-            "users": [
+    if users_col.count_documents({}) == 0:
+        initial_users = []
+        # Attempt to migrate from db.json if it exists to preserve local accounts
+        if os.path.exists("db.json"):
+            try:
+                with open("db.json", "r") as f:
+                    data = json.load(f)
+                    initial_users = data.get("users", [])
+            except Exception as e:
+                print(f"Error reading db.json during migration: {e}")
+        
+        if not initial_users:
+            initial_users = [
                 {
                     "id": "admin-id-123",
                     "full_name": "System Administrator",
@@ -65,18 +103,7 @@ def init_db():
                     "license_number": "DL-99999999"
                 }
             ]
-        }
-        with open(DB_FILE, "w") as f:
-            json.dump(initial_data, f, indent=2)
-
-def load_db():
-    init_db()
-    with open(DB_FILE, "r") as f:
-        return json.load(f)
-
-def save_db(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+        users_col.insert_many(initial_users)
 
 # Run database initializer
 init_db()
@@ -102,12 +129,11 @@ def get_current_user_from_token(credentials: HTTPAuthorizationCredentials = Secu
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
     
-    db_data = load_db()
-    for user in db_data["users"]:
-        if user["email"].lower() == payload["email"].lower():
-            return user
-            
-    raise HTTPException(status_code=401, detail="User not found")
+    user = users_col.find_one({"email": payload["email"].lower()})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+        
+    return clean_user(user)
 
 # --- Validation Helper ---
 def validate_employee_email(email: str) -> bool:
@@ -147,10 +173,9 @@ def signup(payload: SignupRequest):
                 detail="Employee email must be under the .aditiconsulting.com domain"
             )
             
-    db_data = load_db()
-    for u in db_data["users"]:
-        if u["email"].lower() == payload.email.lower():
-            raise HTTPException(status_code=400, detail="User already exists with this email")
+    existing_user = users_col.find_one({"email": payload.email.lower()})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists with this email")
             
     new_user = {
         "id": str(uuid.uuid4()),
@@ -164,25 +189,12 @@ def signup(payload: SignupRequest):
         "department": payload.department,
         "license_number": payload.license_number
     }
-    db_data["users"].append(new_user)
-    save_db(db_data)
-    return {
-        "id": new_user["id"],
-        "full_name": new_user["full_name"],
-        "email": new_user["email"],
-        "role": new_user["role"],
-        "status": new_user["status"]
-    }
+    users_col.insert_one(new_user)
+    return clean_user(new_user)
 
 @app.post("/api/v1/auth/login")
 def login(payload: LoginRequest):
-    db_data = load_db()
-    user = None
-    for u in db_data["users"]:
-        if u["email"].lower() == payload.email.lower():
-            user = u
-            break
-            
+    user = users_col.find_one({"email": payload.email.lower()})
     if not user or user["password"] != payload.password:
         raise HTTPException(status_code=401, detail="Invalid email or password")
         
@@ -217,58 +229,37 @@ def me(current_user: dict = Depends(get_current_user_from_token)):
 def pending_users(current_user: dict = Depends(get_current_user_from_token)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Only admin can view pending users")
-    db_data = load_db()
-    pending = [
-        {
-            "id": u["id"],
-            "full_name": u["full_name"],
-            "email": u["email"],
-            "role": u["role"],
-            "status": u["status"]
-        }
-        for u in db_data["users"] if u["status"] == "pending"
-    ]
-    return pending
+    pending = users_col.find({"status": "pending"})
+    return [clean_user(u) for u in pending]
 
 @app.post("/api/v1/auth/{user_id}/decision")
 def decide_request(user_id: str, payload: DecisionRequest, current_user: dict = Depends(get_current_user_from_token)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Only admin can approve/reject users")
-    db_data = load_db()
-    user_to_update = None
-    for u in db_data["users"]:
-        if u["id"] == user_id:
-            user_to_update = u
-            break
+    user_to_update = users_col.find_one({"id": user_id})
     if not user_to_update:
         raise HTTPException(status_code=404, detail="User not found")
-    user_to_update["status"] = payload.status
-    save_db(db_data)
-    return {"message": f"User {user_to_update['full_name']} marked as {payload.status}"}
+    
+    if payload.status == "rejected":
+        users_col.delete_one({"id": user_id})
+        return {"message": f"User {user_to_update['full_name']} has been rejected and deleted"}
+    else:
+        users_col.update_one({"id": user_id}, {"$set": {"status": payload.status}})
+        return {"message": f"User {user_to_update['full_name']} marked as {payload.status}"}
 
 @app.get("/api/v1/users")
 def get_users(current_user: dict = Depends(get_current_user_from_token)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Only admin can list users")
-    db_data = load_db()
-    return [
-        {
-            "id": u["id"],
-            "full_name": u["full_name"],
-            "email": u["email"],
-            "role": u["role"],
-            "status": u["status"]
-        }
-        for u in db_data["users"]
-    ]
+    all_users = users_col.find({})
+    return [clean_user(u) for u in all_users]
 
 # --- Dashboard & Tracking Mock Endpoints ---
 
 @app.get("/api/v1/analytics/dashboard")
 def get_dashboard_analytics(current_user: dict = Depends(get_current_user_from_token)):
-    db_data = load_db()
-    total_employees = sum(1 for u in db_data["users"] if u["role"] == "employee" and u["status"] == "approved")
-    total_drivers = sum(1 for u in db_data["users"] if u["role"] == "driver" and u["status"] == "approved")
+    total_employees = users_col.count_documents({"role": "employee", "status": "approved"})
+    total_drivers = users_col.count_documents({"role": "driver", "status": "approved"})
     return {
         "total_employees": total_employees,
         "total_drivers": total_drivers,
