@@ -1002,3 +1002,37 @@ button, input, textarea, select { font: inherit; }
 .ai-composer-simple textarea::placeholder {
   color: rgba(255, 222, 0, 0.45);
 }
+
+/* Pagination styles */
+.pagination {
+  display: flex;
+  gap: 6px;
+  padding: 12px 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.pg-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.15s;
+}
+.pg-btn:hover:not([disabled]) {
+  background: rgba(255, 222, 0, 0.12);
+  border-color: var(--accent);
+}
+.pg-btn.pg-active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.pg-btn[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+

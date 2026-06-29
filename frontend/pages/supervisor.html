@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>E.R.T.H | Supervisor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/main.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="../js/app.js"></script>
+  <style>
+    .checklist-container {
+      display: grid;
+      gap: 8px;
+      max-height: 180px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      padding: 12px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.4);
+    }
+    .checklist-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .checklist-item input {
+      width: auto !important;
+      margin: 0;
+    }
+    .order-list-container {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .order-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: rgba(255, 222, 0, 0.05);
+    }
+    .order-controls {
+      display: flex;
+      gap: 6px;
+    }
+    .order-btn {
+      padding: 4px 8px;
+      font-size: 0.8rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .order-btn:hover {
+      background: rgba(255, 222, 0, 0.1);
+    }
+    .recurring-days {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .day-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.15s;
+    }
+    .day-toggle:has(input:checked) {
+      background: rgba(255,222,0,0.15);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .day-toggle input { display: none; }
+    .pagination { display: flex; gap: 6px; padding: 12px 0; flex-wrap: wrap; }
+    .pg-btn {
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.15s;
+    }
+    .pg-btn:hover:not([disabled]) { background: rgba(255,222,0,0.12); border-color: var(--accent); }
+    .pg-btn.pg-active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; }
+    .pg-btn[disabled] { opacity: 0.35; cursor: not-allowed; }
+  </style>
+</head>
+<body data-page="supervisor">
+  <div class="app-shell">
+    <aside class="app-sidebar">
+      <a class="brand" href="./supervisor.html">
+        <span class="brand-mark">ERTH</span>
+        <span class="brand-copy"><strong>Supervisor</strong></span>
+      </a>
+      <nav class="nav-list">
+        <a class="nav-item active" id="navRideGroups" href="#">Ride Groups</a>
+        <a class="nav-item" id="navEmployeeMap" href="#">Employee Pickup Map</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="sessionBadge" class="session-badge">Signed out</span>
+        <button id="logoutButton" class="ghost-button" type="button">Sign out</button>
+      </div>
+    </aside>
+
+    <main class="app-main">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Supervisor dashboard</p>
+          <h1 id="supervisorTitle">Create ride groups, assign drivers, and manage pickup order</h1>
+        </div>
+        <div class="site-actions">
+          <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
+          <button id="notificationBell" class="ghost-button notification-bell" type="button" aria-label="Notifications">
+            <span class="bell-icon" aria-hidden="true"></span>
+            <span class="notification-dot" aria-hidden="true"></span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Section 1: Ride Groups Management -->
+      <div id="rideGroupsSection">
+        <section class="metrics-row">
+          <article class="metric-card"><span>Total groups</span><strong id="metricGroups">0</strong></article>
+          <article class="metric-card"><span>Total employees</span><strong id="metricEmployees">0</strong></article>
+          <article class="metric-card"><span>Total drivers</span><strong id="metricDrivers">0</strong></article>
+        </section>
+
+        <section class="dashboard-grid">
+          <section class="card span-3 map-full">
+            <div class="section-heading"><div><p class="eyebrow">Live tracking</p><h3>Active cab positions</h3></div></div>
+            <div id="liveMap" class="map-surface"></div>
+          </section>
+
+          <!-- Form to Create/Edit Group -->
+          <section class="card" id="formCard">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow" id="formEyebrow">Management</p>
+                <h3 id="formTitle">Create Ride Group</h3>
+              </div>
+              <button type="button" id="cancelEditBtn" class="ghost-button" style="display: none; padding: 6px 12px; font-size: 0.85rem;">Cancel Edit</button>
+            </div>
+            <form id="groupForm" class="auth-form" style="padding: 10px 0;">
+              <input type="hidden" id="groupId" />
+              <div class="form-group">
+                <label for="groupName">Group Name</label>
+                <input id="groupName" name="name" type="text" placeholder="e.g. Morning Route A" required />
+              </div>
+
+              <div class="form-group">
+                <label for="groupDriver">Assign Driver</label>
+                <select id="groupDriver" name="driver_id" required>
+                  <option value="" disabled selected>Select an approved driver</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label>Select Passengers (Employees)</label>
+                <div id="employeeChecklist" class="checklist-container">
+                  <p class="code-block" style="margin: 0; padding: 8px;">No approved employees found.</p>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Pickup Order</label>
+                  <div id="pickupOrderList" class="order-list-container">
+                    <p style="font-size: 0.85rem; color: var(--muted); margin: 0;">Select passengers first.</p>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Drop Order</label>
+                  <div id="dropOrderList" class="order-list-container">
+                    <p style="font-size: 0.85rem; color: var(--muted); margin: 0;">Select passengers first.</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Recurring Ride Settings -->
+              <div class="form-group">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                  <input type="checkbox" id="isRecurring" name="is_recurring" style="width:auto;margin:0;" />
+                  <span>Make this a recurring ride</span>
+                </label>
+              </div>
+              <div id="recurringFields" style="display:none;">
+                <div class="form-group">
+                  <label>Repeat on days</label>
+                  <div class="recurring-days">
+                    <label class="day-toggle"><input type="checkbox" name="recurrence_days" value="mon" /><span>Mon</span></label>
+                    <label class="day-toggle"><input type="checkbox" name="recurrence_days" value="tue" /><span>Tue</span></label>
+                    <label class="day-toggle"><input type="checkbox" name="recurrence_days" value="wed" /><span>Wed</span></label>
+                    <label class="day-toggle"><input type="checkbox" name="recurrence_days" value="thu" /><span>Thu</span></label>
+                    <label class="day-toggle"><input type="checkbox" name="recurrence_days" value="fri" /><span>Fri</span></label>
+                    <label class="day-toggle"><input type="checkbox" name="recurrence_days" value="sat" /><span>Sat</span></label>
+                    <label class="day-toggle"><input type="checkbox" name="recurrence_days" value="sun" /><span>Sun</span></label>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="departureTime">Departure Time (IST)</label>
+                  <input type="time" id="departureTime" name="departure_time" />
+                </div>
+              </div>
+
+              <button type="submit" id="submitGroupBtn" class="primary-button" style="margin-top: 12px;">Create Ride Group</button>
+              <div id="groupResult" class="form-result"></div>
+            </form>
+          </section>
+
+          <!-- Existing Groups Table -->
+          <section class="card span-2" id="tableCard">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Active groups</p>
+                <h3>Existing Ride Groups</h3>
+              </div>
+            </div>
+            <div id="groupsTable" class="table-shell">
+              <p class="code-block">Loading ride groups...</p>
+            </div>
+            <div id="groupsPagination"></div>
+          </section>
+        </section>
+      </div>
+
+      <!-- Section 2: All Employees Bird's Eye View Map -->
+      <div id="employeeMapSection" style="display: none;">
+        <section class="card span-3 map-full" style="height: calc(100vh - 220px); min-height: 550px; display: flex; flex-direction: column;">
+          <div class="section-heading" style="padding-bottom: 12px; margin-bottom: 0;">
+            <div>
+              <p class="eyebrow">Bird's eye view</p>
+              <h3>All Employee Pickup Locations</h3>
+            </div>
+          </div>
+          <div id="allEmployeesMap" class="map-surface" style="flex: 1; min-height: 480px; border-radius: 10px; border: 1px solid var(--border);"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

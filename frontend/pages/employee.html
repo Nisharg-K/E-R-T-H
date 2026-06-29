@@ -61,6 +61,26 @@
         </section>
 
         <section class="card span-2">
+          <div class="section-heading"><div><p class="eyebrow">Settings</p><h3>Daily Pickup Point</h3></div></div>
+          <p style="font-size: 0.85rem; color: var(--muted); margin-bottom: 12px;">Click on the map to set your pickup location, or use the GPS button to auto-detect.</p>
+          <div id="pickupMap" style="width: 100%; height: 320px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 16px;"></div>
+          <form id="pickupForm" class="auth-form" style="padding: 0;">
+            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+              <button type="button" id="pickupGpsBtn" class="ghost-button" style="white-space: nowrap;">📍 Use my GPS location</button>
+              <span id="pickupCoords" style="font-size: 0.85rem; color: var(--muted);">No location selected</span>
+            </div>
+            <div class="form-group">
+              <label for="pickupLabel">Location label (optional)</label>
+              <input id="pickupLabel" name="label" type="text" placeholder="e.g. Alkapuri, Vadodara" />
+            </div>
+            <input type="hidden" id="pickupLat" name="latitude" />
+            <input type="hidden" id="pickupLng" name="longitude" />
+            <button type="submit" class="primary-button" id="pickupSaveBtn" disabled>Save Pickup Location</button>
+            <div id="pickupResult" class="form-result"></div>
+          </form>
+        </section>
+
+        <section class="card span-2">
           <div class="section-heading"><div><p class="eyebrow">Ride history</p><h3>Assigned rides</h3></div></div>
           <div id="ridesTable" class="table-shell"></div>
         </section>

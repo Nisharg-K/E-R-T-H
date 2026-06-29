@@ -1,20 +1,34 @@
 import uvicorn
 import uuid
+import math
+from contextlib import asynccontextmanager
 from typing import Optional
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 # Core internal utility dependencies
-from app.core.database import init_db, load_db, save_db
+from app.core.database import users_col, clean_user
 from app.core.auth import get_current_user_from_token, generate_token, validate_employee_email
-from app.routers import analytics, rides, tracking, notification
+from app.routers import analytics, rides, tracking, notification, ride_groups
+from app.routers.scheduler import start_scheduler
+
+_scheduler = None
+
+@asynccontextmanager
+async def lifespan(app):
+    global _scheduler
+    _scheduler = start_scheduler()
+    yield
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown(wait=False)
 
 app = FastAPI(
     title="E.R.T.H | Employee Route Tracking Hub",
     description="Backend API for Employee Route Tracking Hub",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -24,8 +38,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-init_db()
 
 # --- Schemas ---
 class LoginRequest(BaseModel):
@@ -45,6 +57,11 @@ class SignupRequest(BaseModel):
 class DecisionRequest(BaseModel):
     status: str
 
+class PickupPointRequest(BaseModel):
+    latitude: float
+    longitude: float
+    label: str = ""
+
 # --- Auth API Routes ---
 
 @app.post("/api/v1/auth/signup")
@@ -56,10 +73,9 @@ def signup(payload: SignupRequest):
                 detail="Employee email must be under the .aditiconsulting.com domain"
             )
             
-    db_data = load_db()
-    for u in db_data["users"]:
-        if u["email"].lower() == payload.email.lower():
-            raise HTTPException(status_code=400, detail="User already exists with this email")
+    existing_user = users_col.find_one({"email": payload.email.lower()})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists with this email")
             
     new_user = {
         "id": str(uuid.uuid4()),
@@ -73,25 +89,12 @@ def signup(payload: SignupRequest):
         "department": payload.department,
         "license_number": payload.license_number
     }
-    db_data["users"].append(new_user)
-    save_db(db_data)
-    return {
-        "id": new_user["id"],
-        "full_name": new_user["full_name"],
-        "email": new_user["email"],
-        "role": new_user["role"],
-        "status": new_user["status"]
-    }
+    users_col.insert_one(new_user)
+    return clean_user(new_user)
 
 @app.post("/api/v1/auth/login")
 def login(payload: LoginRequest):
-    db_data = load_db()
-    user = None
-    for u in db_data["users"]:
-        if u["email"].lower() == payload.email.lower():
-            user = u
-            break
-            
+    user = users_col.find_one({"email": payload.email.lower()})
     if not user or user["password"] != payload.password:
         raise HTTPException(status_code=401, detail="Invalid email or password")
         
@@ -102,7 +105,7 @@ def login(payload: LoginRequest):
                 detail="Employee login is restricted to the .aditiconsulting.com domain"
             )
             
-    if user["status"] != "approved" and user["role"] != "admin":
+    if user["status"] != "approved" and user["role"] not in ("admin", "supervisor"):
         raise HTTPException(status_code=403, detail="Account awaiting approval")
         
     token = generate_token(user["email"], user["role"])
@@ -118,63 +121,70 @@ def me(current_user: dict = Depends(get_current_user_from_token)):
         "full_name": current_user["full_name"],
         "email": current_user["email"],
         "role": current_user["role"],
-        "status": current_user["status"]
+        "status": current_user["status"],
+        "pickup_point": current_user.get("pickup_point")
     }
+
+@app.put("/api/v1/users/me/pickup-point")
+def update_pickup_point(payload: PickupPointRequest, current_user: dict = Depends(get_current_user_from_token)):
+    pickup_data = {
+        "latitude": payload.latitude,
+        "longitude": payload.longitude,
+        "label": payload.label,
+    }
+    users_col.update_one(
+        {"id": current_user["id"]},
+        {"$set": {"pickup_point": pickup_data}}
+    )
+    return {"pickup_point": pickup_data}
 
 @app.get("/api/v1/auth/pending")
 def pending_users(current_user: dict = Depends(get_current_user_from_token)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Only admin can view pending users")
-    db_data = load_db()
-    pending = [
-        {
-            "id": u["id"],
-            "full_name": u["full_name"],
-            "email": u["email"],
-            "role": u["role"],
-            "status": u["status"]
-        }
-        for u in db_data["users"] if u["status"] == "pending"
-    ]
-    return pending
+    pending = users_col.find({"status": "pending"})
+    return [clean_user(u) for u in pending]
 
 @app.post("/api/v1/auth/{user_id}/decision")
 def decide_request(user_id: str, payload: DecisionRequest, current_user: dict = Depends(get_current_user_from_token)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Only admin can approve/reject users")
-    db_data = load_db()
-    user_to_update = None
-    for u in db_data["users"]:
-        if u["id"] == user_id:
-            user_to_update = u
-            break
+    user_to_update = users_col.find_one({"id": user_id})
     if not user_to_update:
         raise HTTPException(status_code=404, detail="User not found")
-    user_to_update["status"] = payload.status
-    save_db(db_data)
-    return {"message": f"User {user_to_update['full_name']} marked as {payload.status}"}
+    
+    if payload.status == "rejected":
+        users_col.delete_one({"id": user_id})
+        return {"message": f"User {user_to_update['full_name']} has been rejected and deleted"}
+    else:
+        users_col.update_one({"id": user_id}, {"$set": {"status": payload.status}})
+        return {"message": f"User {user_to_update['full_name']} marked as {payload.status}"}
 
 @app.get("/api/v1/users")
-def get_users(current_user: dict = Depends(get_current_user_from_token)):
-    if current_user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Only admin can list users")
-    db_data = load_db()
-    return [
-        {
-            "id": u["id"],
-            "full_name": u["full_name"],
-            "email": u["email"],
-            "role": u["role"],
-            "status": u["status"]
-        }
-        for u in db_data["users"]
-    ]
+def get_users(
+    current_user: dict = Depends(get_current_user_from_token),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100)
+):
+    if current_user["role"] not in ("admin", "supervisor"):
+        raise HTTPException(status_code=403, detail="Only admin or supervisor can list users")
+    total = users_col.count_documents({})
+    skip = (page - 1) * limit
+    all_users = users_col.find({}).skip(skip).limit(limit)
+    import math
+    return {
+        "items": [clean_user(u) for u in all_users],
+        "total": total,
+        "page": page,
+        "pages": math.ceil(total / limit) if total > 0 else 1
+    }
 
 # --- Router Inclusions ---
 app.include_router(analytics.router)
 app.include_router(rides.router)
 app.include_router(tracking.router)
 app.include_router(notification.router)
+app.include_router(ride_groups.router)
 
 # --- Static Frontend Serving ---
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

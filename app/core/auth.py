@@ -2,7 +2,7 @@ import base64
 from typing import Optional
 from fastapi import HTTPException, Depends, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.core.database import load_db
+from app.core.database import users_col, clean_user
 
 # --- Auth Token Utilities ---
 def generate_token(email: str, role: str) -> str:
@@ -25,12 +25,11 @@ def get_current_user_from_token(credentials: HTTPAuthorizationCredentials = Secu
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
     
-    db_data = load_db()
-    for user in db_data["users"]:
-        if user["email"].lower() == payload["email"].lower():
-            return user
-            
-    raise HTTPException(status_code=401, detail="User not found")
+    user = users_col.find_one({"email": payload["email"].lower()})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+        
+    return clean_user(user)
 
 # --- Validation Helper ---
 def validate_employee_email(email: str) -> bool:
