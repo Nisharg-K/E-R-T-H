@@ -43,6 +43,42 @@
       "employee_id": "EMP-002",
       "department": "HR",
       "license_number": null
+    },
+    {
+      "id": "17f669cf-1229-4d1d-873a-d486cf7a3983",
+      "full_name": "dharmik",
+      "email": "dharmik@aditiconsulting.com",
+      "password": "12345678",
+      "role": "employee",
+      "status": "rejected",
+      "mobile_number": "0000000000",
+      "employee_id": "1",
+      "department": "DES",
+      "license_number": null
+    },
+    {
+      "id": "7c521807-0b52-49a3-9529-0a597e387c68",
+      "full_name": "Nisarg",
+      "email": "nisarg@aditiconsulting.com",
+      "password": "123456",
+      "role": "employee",
+      "status": "rejected",
+      "mobile_number": "1111111111",
+      "employee_id": "001",
+      "department": "DES",
+      "license_number": null
+    },
+    {
+      "id": "b864fb8d-0164-438f-9172-73e5514b4ed0",
+      "full_name": "Nisarg",
+      "email": "nisargz@aditiconsulting.com",
+      "password": "123456",
+      "role": "employee",
+      "status": "rejected",
+      "mobile_number": "1111111111",
+      "employee_id": "001",
+      "department": "DES",
+      "license_number": null
     }
   ]
 }

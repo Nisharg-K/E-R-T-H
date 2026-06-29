@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>E.R.T.H | AI Query</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/main.css" />
+  <script defer src="../js/app.js"></script>
+</head>
+<body data-page="admin-ai">
+  <div class="app-shell ai-shell-simple">
+    <aside class="app-sidebar ai-sidebar-simple">
+      <a class="brand" href="./admin.html"><span class="brand-mark">ERTH</span><span class="brand-copy"><strong>Admin</strong></span></a>
+      <nav class="nav-list">
+        <a class="nav-item" href="./admin.html">Overview</a>
+        <a class="nav-item" href="./admin-approval.html">Approval</a>
+        <a class="nav-item" href="./admin-ride.html">Ride</a>
+        <a class="nav-item" href="./admin-people.html">People</a>
+        <a class="nav-item active" href="./admin-ai.html">AI Query</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="sessionBadge" class="session-badge">Signed out</span>
+        <button id="logoutButton" class="ghost-button" type="button">Sign out</button>
+      </div>
+    </aside>
+    <main class="ai-main-simple">
+      <header class="ai-topbar-simple">
+        <div>AI Query</div>
+      </header>
+      <section class="ai-chat-simple">
+        <div id="aiChat" class="ai-thread-simple"></div>
+        <form id="chatForm" class="ai-composer-simple">
+          <textarea name="question" rows="2" placeholder="Ask about trips, users, approvals..."></textarea>
+          <button class="primary-button" type="submit">Send</button>
+        </form>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

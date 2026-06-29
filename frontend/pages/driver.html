@@ -17,9 +17,7 @@
     <aside class="app-sidebar">
       <a class="brand" href="./driver.html">
         <span class="brand-mark">ERTH</span>
-        <span class="brand-copy">
-          <strong>Driver</strong>
-        </span>
+        <span class="brand-copy"><strong>Driver</strong></span>
       </a>
       <nav class="nav-list">
         <a class="nav-item active" href="/pages/driver.html">Assigned route</a>
@@ -38,6 +36,10 @@
         </div>
         <div class="site-actions">
           <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
+          <button id="notificationBell" class="ghost-button notification-bell" type="button" aria-label="Notifications">
+            <span class="bell-icon" aria-hidden="true"></span>
+            <span class="notification-dot" aria-hidden="true"></span>
+          </button>
         </div>
       </header>
 
@@ -56,11 +58,6 @@
         <section class="card">
           <div class="section-heading"><div><p class="eyebrow">Current trip</p><h3>Assigned route details</h3></div></div>
           <div id="currentRideCard" class="list-panel"></div>
-        </section>
-
-        <section class="card">
-          <div class="section-heading"><div><p class="eyebrow">Notifications</p><h3>Driver alerts</h3></div></div>
-          <div id="notificationsList" class="list-panel"></div>
         </section>
 
         <section class="card span-2">

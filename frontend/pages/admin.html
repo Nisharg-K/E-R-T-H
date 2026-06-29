@@ -17,14 +17,14 @@
     <aside class="app-sidebar">
       <a class="brand" href="./admin.html">
         <span class="brand-mark">ERTH</span>
-        <span class="brand-copy">
-          <strong>Admin</strong>
-        </span>
+        <span class="brand-copy"><strong>Admin</strong></span>
       </a>
       <nav class="nav-list">
         <a class="nav-item active" href="./admin.html">Overview</a>
-        <a class="nav-item" href="./employee.html">User view</a>
-        <a class="nav-item" href="./driver.html">Driver view</a>
+        <a class="nav-item" href="./admin-approval.html">Approval</a>
+        <a class="nav-item" href="./admin-ride.html">Ride</a>
+        <a class="nav-item" href="./admin-people.html">People</a>
+        <a class="nav-item" href="./admin-ai.html">AI Query</a>
       </nav>
       <div class="sidebar-footer">
         <span id="sessionBadge" class="session-badge">Signed out</span>
@@ -34,12 +34,15 @@
 
     <main class="app-main">
       <header class="app-header">
-        <div>
-          <p class="eyebrow">Admin dashboard</p>
-          <h1>Command the cab network with live precision</h1>
+        <div class="app-header-brand">
+          <span class="brand-mark">ERTH Admin</span>
         </div>
-        <div class="site-actions">
+        <div class="top-right-actions">
           <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
+          <button id="notificationBell" class="ghost-button notification-bell floating-bell" type="button" aria-label="Notifications">
+            <span class="bell-icon" aria-hidden="true"></span>
+            <span class="notification-dot" aria-hidden="true"></span>
+          </button>
         </div>
       </header>
 
@@ -51,38 +54,9 @@
       </section>
 
       <section class="dashboard-grid">
-        <section class="card span-2">
+        <section class="card span-3 map-full">
           <div class="section-heading"><div><p class="eyebrow">Live tracking</p><h3>Active cab positions</h3></div></div>
           <div id="liveMap" class="map-surface"></div>
-        </section>
-
-        <section class="card">
-          <div class="section-heading"><div><p class="eyebrow">Approvals</p><h3>Pending requests</h3></div></div>
-          <div id="approvalsList" class="list-panel"></div>
-        </section>
-
-        <section class="card">
-          <div class="section-heading"><div><p class="eyebrow">Notifications</p><h3>Recent activity</h3></div></div>
-          <div id="notificationsList" class="list-panel"></div>
-        </section>
-
-        <section class="card span-2">
-          <div class="section-heading"><div><p class="eyebrow">Rides</p><h3>Ride history and current status</h3></div></div>
-          <div id="ridesTable" class="table-shell"></div>
-        </section>
-
-        <section class="card">
-          <div class="section-heading"><div><p class="eyebrow">People</p><h3>Users and drivers</h3></div></div>
-          <div id="usersList" class="list-panel"></div>
-        </section>
-
-        <section class="card">
-          <div class="section-heading"><div><p class="eyebrow">AI query</p><h3>Ask about trip data</h3></div></div>
-          <form id="chatForm" class="auth-form">
-            <label>Query <textarea name="question" rows="4" placeholder="Show rides delayed more than 10 minutes."></textarea></label>
-            <button class="primary-button" type="submit">Run query</button>
-          </form>
-          <pre id="chatResult" class="code-block">Ask a supported analytics question.</pre>
         </section>
       </section>
     </main>

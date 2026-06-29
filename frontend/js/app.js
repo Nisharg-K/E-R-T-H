@@ -19,6 +19,8 @@ const state = {
   map: null,
   mapReady: false,
   markers: [],
+  notificationCount: Number(localStorage.getItem("cms-notification-count") || 0),
+  notificationPoll: null,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -49,12 +51,6 @@ function initTheme() {
   const stored = localStorage.getItem("cms-theme");
   const preferred = stored || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   setTheme(preferred);
-  const toggle = byId("themeToggle");
-  if (toggle) {
-    toggle.addEventListener("click", () => {
-      setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
-    });
-  }
 }
 
 function persistSession(accessToken, role) {
@@ -74,11 +70,11 @@ function clearSession() {
 
 function redirectForRole(role) {
   const route = currentPage === "auth" ? AUTH_ROLE_ROUTES[role] : PAGE_ROLE_ROUTES[role];
-  if (!route) {
-    window.location.href = currentPage === "auth" ? "./index.html" : "../index.html";
-    return;
-  }
-  window.location.href = route;
+  window.location.href = route || (currentPage === "auth" ? "./index.html" : "../index.html");
+}
+
+function isAdminPage() {
+  return currentPage === "admin" || currentPage === "admin-approval" || currentPage === "admin-ride" || currentPage === "admin-people" || currentPage === "admin-ai";
 }
 
 function updateSessionBadge() {
@@ -89,10 +85,7 @@ function updateSessionBadge() {
 }
 
 function ensureMap() {
-  if (state.mapReady || !window.L || !byId("liveMap")) {
-    return;
-  }
-
+  if (state.mapReady || !window.L || !byId("liveMap")) return;
   state.map = L.map("liveMap").setView([22.3072, 73.1812], 11);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
@@ -103,52 +96,131 @@ function ensureMap() {
 
 function updateMap(markers) {
   ensureMap();
-  if (!state.mapReady || !state.map) {
-    return;
-  }
-
+  if (!state.mapReady || !state.map) return;
   state.markers.forEach((marker) => marker.remove());
   state.markers = markers.map((marker) => (
     L.marker([marker.latitude, marker.longitude])
       .addTo(state.map)
       .bindPopup(`<strong>${marker.driver_name}</strong><br>${marker.cab_number || "Cab"}<br>${marker.recorded_at}`)
   ));
-
   if (state.markers[0]) {
     state.map.setView(state.markers[0].getLatLng(), 12);
   }
 }
 
-function renderList(containerId, items, emptyTitle, mapper) {
-  const container = byId(containerId);
-  if (!container) {
-    return;
+function normalizeErrorMessage(message) {
+  if (!message) return "Something went wrong";
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed?.detail) return parsed.detail;
+  } catch (error) {}
+  if (message.includes("User already exists with this email")) {
+    return "An account already exists for that email address.";
   }
+  return message.replace(/^Error:\s*/i, "");
+}
 
-  container.innerHTML = "";
-  if (!items.length) {
-    container.innerHTML = `<article><strong>${emptyTitle}</strong><small>No records available right now.</small></article>`;
-    return;
+function parseApiError(error) {
+  try {
+    const parsed = JSON.parse(error.message);
+    if (parsed && parsed.detail) return parsed.detail;
+    return error.message;
+  } catch (e) {
+    return error.message || String(error);
   }
+}
 
-  items.forEach((item) => {
-    const article = document.createElement("article");
-    article.innerHTML = mapper(item);
-    container.appendChild(article);
-  });
+function getUnreadCount(notifications) {
+  return notifications.filter((item) => !item.is_read).length;
+}
+
+function playBellTone() {
+  try {
+    const audio = new Audio("../assets/notify-bell.mp3");
+    audio.play().catch(() => {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.02);
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      oscillator.start();
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.6);
+      setTimeout(() => {
+        oscillator.stop();
+        ctx.close();
+      }, 700);
+    });
+  } catch (error) {}
+}
+
+function ensureNotificationDrawer() {
+  let drawer = byId("notificationDrawer");
+  if (drawer) return drawer;
+  drawer = document.createElement("section");
+  drawer.id = "notificationDrawer";
+  drawer.className = "notification-drawer";
+  drawer.innerHTML = `\r\n    <div class="notification-drawer-panel">\r\n      <div class="notification-drawer-head">\r\n        <strong>Notifications</strong>\r\n        <button type="button" class="ghost-button" data-close-notifications>Close</button>\r\n      </div>\r\n      <div id="notificationList" class="notification-list"></div>\r\n    </div>\r\n  `;
+  document.body.appendChild(drawer);
+  drawer.querySelector("[data-close-notifications]")?.addEventListener("click", closeNotificationDrawer);
+  return drawer;
+}
+
+function openNotificationDrawer() {
+  ensureNotificationDrawer().classList.add("open");
+}
+
+function closeNotificationDrawer() {
+  const drawer = byId("notificationDrawer");
+  if (drawer) drawer.classList.remove("open");
+}
+
+function renderNotifications(notifications) {
+  const container = byId("notificationList");
+  if (!container) return;
+  container.innerHTML = notifications.length
+    ? notifications.map((item) => `<article class="notification-item ${item.is_read ? "" : "unread"}"><strong>${item.title || "Update"}</strong><small>${item.message || ""}</small></article>`).join("")
+    : '<p class="code-block">No notifications right now.</p>';
+}
+
+function updateNotificationState(notifications) {
+  const unreadCount = getUnreadCount(notifications);
+  const bell = byId("notificationBell");
+  if (bell) {
+    bell.dataset.count = String(unreadCount);
+    bell.classList.toggle("has-new", unreadCount > 0);
+  }
+  renderNotifications(notifications);
+  if (unreadCount > state.notificationCount) {
+    playBellTone();
+  }
+  state.notificationCount = unreadCount;
+  localStorage.setItem("cms-notification-count", String(unreadCount));
+}
+
+async function loadNotifications() {
+  const notifications = await api("/api/v1/notifications").catch(() => []);
+  updateNotificationState(notifications || []);
+  return notifications || [];
+}
+
+function startNotificationPolling() {
+  if (state.notificationPoll) clearInterval(state.notificationPoll);
+  state.notificationPoll = window.setInterval(() => {
+    if (state.token) loadNotifications().catch(() => {});
+  }, 30000);
 }
 
 function renderRidesTable(containerId, rides) {
   const container = byId(containerId);
-  if (!container) {
-    return;
-  }
-
+  if (!container) return;
   if (!rides.length) {
     container.innerHTML = "<p class=\"code-block\">No rides available.</p>";
     return;
   }
-
   const rows = rides.map((ride) => `
     <tr>
       <td>${ride.ride_reference}</td>
@@ -159,30 +231,80 @@ function renderRidesTable(containerId, rides) {
       <td>${Number(ride.total_cost || 0).toFixed(2)}</td>
     </tr>
   `).join("");
-
   container.innerHTML = `
     <table>
-      <thead>
-        <tr>
-          <th>Reference</th>
-          <th>Pickup</th>
-          <th>Drop</th>
-          <th>Status</th>
-          <th>Delay</th>
-          <th>Cost</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Reference</th><th>Pickup</th><th>Drop</th><th>Status</th><th>Delay</th><th>Cost</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
 }
 
-function getUnreadCount(notifications) {
-  return notifications.filter((item) => !item.is_read).length;
+function renderApprovalsTable(containerId, approvals) {
+  const container = byId(containerId);
+  if (!container) return;
+  if (!approvals.length) {
+    container.innerHTML = '<p class="code-block">No pending approvals.</p>';
+    return;
+  }
+  const rows = approvals.map((item) => `
+    <tr>
+      <td>${item.full_name}</td>
+      <td>${item.email}</td>
+      <td>${item.role}</td>
+      <td>${item.status}</td>
+      <td>
+        <button class="ghost-button" data-approve="${item.id}">Approve</button>
+        <button class="danger-button" data-reject="${item.id}">Reject</button>
+      </td>
+    </tr>
+  `).join("");
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
 }
 
-function pickCurrentRide(rides) {
-  return rides.find((ride) => ride.status === "ongoing" || ride.status === "started") || rides[0] || null;
+function renderPeopleTable(containerId, people) {
+  const container = byId(containerId);
+  if (!container) return;
+  if (!people.length) {
+    container.innerHTML = '<p class="code-block">No people found.</p>';
+    return;
+  }
+  const rows = people.map((item) => `
+    <tr>
+      <td>${item.full_name}</td>
+      <td>${item.email}</td>
+      <td>${item.role}</td> 
+    </tr>
+  `).join("");
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderChatShell() {
+  const container = byId("aiChat");
+  if (!container) return;
+  container.innerHTML = `
+    <div class="chat-shell-simple">
+      <div class="chat-message-simple assistant">
+        <strong>AI</strong>
+        <p>Welcome to AI Query. Ask about trip data, approvals, rides, or people.</p>
+      </div>
+      <div id="chatWindow" class="chat-window-simple">Waiting for a query...</div>
+    </div>
+  `;
+  const form = byId("chatForm");
+  if (form && !form.dataset.bound) {
+    form.dataset.bound = "true";
+    form.addEventListener("submit", handleChat);
+  }
 }
 
 async function loadCurrentUser() {
@@ -191,7 +313,6 @@ async function loadCurrentUser() {
     updateSessionBadge();
     return null;
   }
-
   state.currentUser = await api("/api/v1/auth/me");
   updateSessionBadge();
   return state.currentUser;
@@ -199,10 +320,7 @@ async function loadCurrentUser() {
 
 function initLogout() {
   const button = byId("logoutButton");
-  if (!button) {
-    return;
-  }
-
+  if (!button) return;
   button.addEventListener("click", () => {
     clearSession();
     window.location.href = currentPage === "auth" ? "./index.html" : "../index.html";
@@ -212,21 +330,16 @@ function initLogout() {
 async function handleLogin(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-
   try {
     const response = await api("/api/v1/auth/login", {
       method: "POST",
-      body: JSON.stringify({
-        email: form.get("email"),
-        password: form.get("password"),
-      }),
+      body: JSON.stringify({ email: form.get("email"), password: form.get("password") }),
     });
-
     persistSession(response.access_token, response.role);
     byId("loginResult").textContent = `Authenticated as ${response.role}. Redirecting to workspace.`;
     redirectForRole(response.role);
   } catch (error) {
-    byId("loginResult").textContent = `Login failed: ${error.message}`;
+    byId("loginResult").textContent = `Login failed: ${normalizeErrorMessage(parseApiError(error))}`;
   }
 }
 
@@ -235,7 +348,7 @@ async function handleSignup(event) {
   const form = new FormData(event.currentTarget);
   const payload = {
     full_name: form.get("full_name"),
-    email: form.get("email"),
+    email: (form.get("email") || "").toLowerCase(),
     password: form.get("password"),
     role: form.get("role"),
     mobile_number: form.get("mobile_number"),
@@ -243,7 +356,6 @@ async function handleSignup(event) {
     department: form.get("department") || null,
     license_number: form.get("license_number") || null,
   };
-
   try {
     const response = await api("/api/v1/auth/signup", {
       method: "POST",
@@ -252,7 +364,7 @@ async function handleSignup(event) {
     byId("signupResult").textContent = `Approval request created for ${response.full_name}.`;
     event.currentTarget.reset();
   } catch (error) {
-    byId("signupResult").textContent = `Signup failed: ${error.message}`;
+    byId("signupResult").textContent = `Signup failed: ${normalizeErrorMessage(parseApiError(error))}`;
   }
 }
 
@@ -264,16 +376,36 @@ async function handleChat(event) {
       method: "POST",
       body: JSON.stringify({ question: form.get("question") }),
     });
-    byId("chatResult").textContent = response.answer;
+    const chatWindow = byId("chatWindow");
+    if (chatWindow) chatWindow.textContent = response.answer;
   } catch (error) {
-    byId("chatResult").textContent = `Query failed: ${error.message}`;
+    const chatWindow = byId("chatWindow");
+    if (chatWindow) chatWindow.textContent = `Query failed: ${error.message}`;
   }
 }
 
-function filterEmployeeRides(rides) {
-  if (!state.currentUser) {
-    return [];
+function pickCurrentRide(rides) {
+  return rides.find((ride) => ride.status === "ongoing" || ride.status === "started") || rides[0] || null;
+}
+
+function renderCurrentRide(containerId, ride, label) {
+  const container = byId(containerId);
+  if (!container) return;
+  if (!ride) {
+    container.innerHTML = `<article><strong>No ${label.toLowerCase()} available</strong><small>There is no assigned active ride right now.</small></article>`;
+    return;
   }
+  container.innerHTML = `
+    <article>
+      <span class="tag ${ride.status === "ongoing" || ride.status === "started" ? "success" : ""}">${ride.status}</span>
+      <strong class="article-title">${ride.pickup_point} to ${ride.drop_point}</strong>
+      <small class="article-meta">Reference: ${ride.ride_reference}<br>Delay minutes: ${ride.delay_minutes ?? 0}<br>Notes: ${ride.notes || "None"}</small>
+    </article>
+  `;
+}
+
+function filterEmployeeRides(rides) {
+  if (!state.currentUser) return [];
   return rides.filter((ride) => (ride.passengers || []).some((passenger) => passenger.passenger_user_id === state.currentUser.id));
 }
 
@@ -283,26 +415,6 @@ function filterDriverRides(rides) {
 
 function filterEscortRides(rides) {
   return state.currentUser ? rides.filter((ride) => ride.escort_user_id === state.currentUser.id) : [];
-}
-
-function renderCurrentRide(containerId, ride, label) {
-  const container = byId(containerId);
-  if (!container) {
-    return;
-  }
-
-  if (!ride) {
-    container.innerHTML = `<article><strong>No ${label.toLowerCase()} available</strong><small>There is no assigned active ride right now.</small></article>`;
-    return;
-  }
-
-  container.innerHTML = `
-    <article>
-      <span class="tag ${ride.status === "ongoing" || ride.status === "started" ? "success" : ""}">${ride.status}</span>
-      <strong class="article-title">${ride.pickup_point} to ${ride.drop_point}</strong>
-      <small class="article-meta">Reference: ${ride.ride_reference}<br>Delay minutes: ${ride.delay_minutes ?? 0}<br>Notes: ${ride.notes || "None"}</small>
-    </article>
-  `;
 }
 
 async function loadAdminPage() {
@@ -321,41 +433,15 @@ async function loadAdminPage() {
   byId("metricActiveRides").textContent = stats.active_rides ?? 0;
   byId("metricDelay").textContent = stats.delayed_trips ?? 0;
 
-  renderRidesTable("ridesTable", rides || []);
-  renderList("notificationsList", (notifications || []).slice(0, 6), "No notifications", (item) => `
-    <strong>${item.title}</strong>
-    <small>${item.message}</small>
-  `);
-  renderList("usersList", (users || []).slice(0, 6), "No users", (item) => `
-    <strong>${item.full_name}</strong>
-    <small>${item.role} - ${item.email}</small>
-  `);
-  renderList("approvalsList", approvals || [], "No pending requests", (item) => `
-    <strong>${item.full_name}</strong>
-    <small>${item.role} - ${item.email}</small>
-    <div class="action-row">
-      <button class="ghost-button" type="button" data-approve="${item.id}">Approve</button>
-      <button class="danger-button" type="button" data-reject="${item.id}">Reject</button>
-    </div>
-  `);
+  ensureNotificationDrawer();
+  updateNotificationState(notifications || []);
   updateMap(active || []);
+  startNotificationPolling();
 
-  const approvalsList = byId("approvalsList");
-  if (approvalsList) {
-    approvalsList.addEventListener("click", async (event) => {
-      const approveId = event.target.dataset.approve;
-      const rejectId = event.target.dataset.reject;
-      if (!approveId && !rejectId) {
-        return;
-      }
-      const userId = approveId || rejectId;
-      const status = approveId ? "approved" : "rejected";
-      await api(`/api/v1/auth/${userId}/decision`, {
-        method: "POST",
-        body: JSON.stringify({ status }),
-      });
-      await loadAdminPage();
-    }, { once: true });
+  const bell = byId("notificationBell");
+  if (bell && !bell.dataset.bound) {
+    bell.dataset.bound = "true";
+    bell.addEventListener("click", () => openNotificationDrawer());
   }
 }
 
@@ -376,11 +462,59 @@ async function loadRoleRidePage(filterFn) {
 
   renderCurrentRide("currentRideCard", currentRide, "ride");
   renderRidesTable("ridesTable", scopedRides);
-  renderList("notificationsList", notifications || [], "No notifications", (item) => `
-    <strong>${item.title}</strong>
-    <small>${item.message}</small>
-  `);
+  ensureNotificationDrawer();
+  updateNotificationState(notifications || []);
   updateMap(active || []);
+  startNotificationPolling();
+
+  const bell = byId("notificationBell");
+  if (bell && !bell.dataset.bound) {
+    bell.dataset.bound = "true";
+    bell.addEventListener("click", () => openNotificationDrawer());
+  }
+}
+
+async function loadAdminOverviewPage() {
+  await loadAdminPage();
+}
+
+async function loadAdminApprovalPage() {
+  await loadCurrentUser();
+  const approvals = await api("/api/v1/auth/pending").catch(() => []);
+  renderApprovalsTable("approvalsTable", approvals || []);
+  const table = byId("approvalsTable");
+  if (table && !table.dataset.bound) {
+    table.dataset.bound = "true";
+    table.addEventListener("click", async (event) => {
+      const approveId = event.target.dataset.approve;
+      const rejectId = event.target.dataset.reject;
+      if (!approveId && !rejectId) return;
+      const userId = approveId || rejectId;
+      const status = approveId ? "approved" : "rejected";
+      await api(`/api/v1/auth/${userId}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ status }),
+      });
+      await loadAdminApprovalPage();
+    });
+  }
+}
+
+async function loadAdminRidePage() {
+  await loadCurrentUser();
+  const rides = await api("/api/v1/rides").catch(() => []);
+  renderRidesTable("ridesTable", rides || []);
+}
+
+async function loadAdminPeoplePage() {
+  await loadCurrentUser();
+  const users = await api("/api/v1/users").catch(() => []);
+  renderPeopleTable("peopleTable", users || []);
+}
+
+async function loadAdminAiPage() {
+  await loadCurrentUser();
+  renderChatShell();
 }
 
 async function initProtectedPage(loader, expectedRole) {
@@ -392,13 +526,9 @@ async function initProtectedPage(loader, expectedRole) {
   try {
     initLogout();
     const refreshButton = byId("refreshButton");
-    if (refreshButton) {
-      refreshButton.addEventListener("click", () => loader());
-    }
+    if (refreshButton) refreshButton.addEventListener("click", () => loader());
     const chatForm = byId("chatForm");
-    if (chatForm) {
-      chatForm.addEventListener("submit", handleChat);
-    }
+    if (chatForm) chatForm.addEventListener("submit", handleChat);
     await loader();
   } catch (error) {
     if (state.token) {
@@ -413,9 +543,8 @@ function initAuthPage() {
     redirectForRole(state.role);
     return;
   }
-
-  byId("loginForm").addEventListener("submit", handleLogin);
-  byId("signupForm").addEventListener("submit", handleSignup);
+  byId("loginForm")?.addEventListener("submit", handleLogin);
+  byId("signupForm")?.addEventListener("submit", handleSignup);
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -427,7 +556,27 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   if (currentPage === "admin") {
-    initProtectedPage(loadAdminPage, "admin");
+    initProtectedPage(loadAdminOverviewPage, "admin");
+    return;
+  }
+
+  if (currentPage === "admin-approval") {
+    initProtectedPage(loadAdminApprovalPage, "admin");
+    return;
+  }
+
+  if (currentPage === "admin-ride") {
+    initProtectedPage(loadAdminRidePage, "admin");
+    return;
+  }
+
+  if (currentPage === "admin-people") {
+    initProtectedPage(loadAdminPeoplePage, "admin");
+    return;
+  }
+
+  if (currentPage === "admin-ai") {
+    initProtectedPage(loadAdminAiPage, "admin");
     return;
   }
 
@@ -445,3 +594,4 @@ window.addEventListener("DOMContentLoaded", () => {
     initProtectedPage(() => loadRoleRidePage(filterEscortRides), "escort");
   }
 });
+

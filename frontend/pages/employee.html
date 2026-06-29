@@ -17,12 +17,7 @@
     <aside class="app-sidebar">
       <a class="brand" href="./employee.html">
         <span class="brand-mark">ERTH</span>
-        <div>
-          
-        </div>
-        <span class="brand-copy">
-          <strong>User</strong>
-        </span>
+        <span class="brand-copy"><strong>User</strong></span>
       </a>
       <nav class="nav-list">
         <a class="nav-item active" href="/pages/employee.html">Current ride</a>
@@ -40,7 +35,11 @@
           <h1>Your cab schedule, live updates, and trip history</h1>
         </div>
         <div class="site-actions">
-                    <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
+          <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
+          <button id="notificationBell" class="ghost-button notification-bell" type="button" aria-label="Notifications">
+            <span class="bell-icon" aria-hidden="true"></span>
+            <span class="notification-dot" aria-hidden="true"></span>
+          </button>
         </div>
       </header>
 
@@ -59,11 +58,6 @@
         <section class="card">
           <div class="section-heading"><div><p class="eyebrow">Current ride</p><h3>Trip summary</h3></div></div>
           <div id="currentRideCard" class="list-panel"></div>
-        </section>
-
-        <section class="card">
-          <div class="section-heading"><div><p class="eyebrow">Notifications</p><h3>Travel alerts</h3></div></div>
-          <div id="notificationsList" class="list-panel"></div>
         </section>
 
         <section class="card span-2">
