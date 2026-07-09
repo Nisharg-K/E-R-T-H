@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 import math
 from app.core.auth import get_current_user_from_token
 from app.core.database import db, ride_groups_col, users_col
+from app.routers.ride_groups import build_passenger_statuses, default_passenger_status
 
 router = APIRouter(prefix="/api/v1/rides", tags=["Rides"])
 
@@ -33,8 +34,16 @@ def get_rides(
         driver_name = driver.get("full_name", "Unknown Driver") if driver else "Unassigned"
         cab_number = driver.get("license_number") or "Cab" if driver else "N/A"
         
+        passenger_statuses = build_passenger_statuses(g.get("passenger_ids", []), g.get("passenger_statuses"))
+
         # Build passenger list matching frontend structure
-        passengers = [{"passenger_user_id": pid} for pid in g.get("passenger_ids", [])]
+        passengers = [
+            {
+                "passenger_user_id": pid,
+                "trip_status": passenger_statuses.get(pid, default_passenger_status())
+            }
+            for pid in g.get("passenger_ids", [])
+        ]
         
         # Resolve sorted pickup_order and drop_order for detailed sequence rendering
         resolved_pickup_order = []
@@ -48,7 +57,8 @@ def get_rides(
                     "order": item["order"],
                     "pickup_label": pk.get("label") if (pk and isinstance(pk, dict)) else "Preferred Pickup Location",
                     "latitude": pk.get("latitude") if (pk and isinstance(pk, dict)) else None,
-                    "longitude": pk.get("longitude") if (pk and isinstance(pk, dict)) else None
+                    "longitude": pk.get("longitude") if (pk and isinstance(pk, dict)) else None,
+                    "trip_status": passenger_statuses.get(item["user_id"], default_passenger_status())
                 })
 
         resolved_drop_order = []
@@ -58,7 +68,8 @@ def get_rides(
                 resolved_drop_order.append({
                     "user_id": item["user_id"],
                     "full_name": p_user.get("full_name"),
-                    "order": item["order"]
+                    "order": item["order"],
+                    "trip_status": passenger_statuses.get(item["user_id"], default_passenger_status())
                 })
         
         # Determine pickup/drop display based on sorted lists
@@ -81,6 +92,7 @@ def get_rides(
             "delay_minutes": g.get("delay_minutes", 0),
             "total_cost": g.get("total_cost", 150.00),
             "passengers": passengers,
+            "passenger_statuses": passenger_statuses,
             "pickup_order": resolved_pickup_order,
             "drop_order": resolved_drop_order,
             "assigned_driver_id": g["driver_id"],

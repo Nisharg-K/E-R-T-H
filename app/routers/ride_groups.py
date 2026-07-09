@@ -40,6 +40,31 @@ class RideGroupUpdate(BaseModel):
     recurrence_days: Optional[List[str]] = None
     departure_time: Optional[str] = None
 
+class PassengerStatusUpdate(BaseModel):
+    status: str
+
+def default_passenger_status() -> dict:
+    return {
+        "status": "pending",
+        "picked_up_at": None,
+        "dropped_at": None
+    }
+
+def build_passenger_statuses(passenger_ids: List[str], existing: Optional[dict] = None) -> dict:
+    existing = existing or {}
+    statuses = {}
+    for passenger_id in passenger_ids:
+        current = existing.get(passenger_id) if isinstance(existing, dict) else None
+        if isinstance(current, dict) and current.get("status") in ("pending", "picked_up", "dropped"):
+            statuses[passenger_id] = {
+                "status": current.get("status", "pending"),
+                "picked_up_at": current.get("picked_up_at"),
+                "dropped_at": current.get("dropped_at")
+            }
+        else:
+            statuses[passenger_id] = default_passenger_status()
+    return statuses
+
 # --- Helper functions to resolve driver and passenger details ---
 def resolve_group_details(group: dict) -> dict:
     resolved = dict(group)
@@ -55,6 +80,7 @@ def resolve_group_details(group: dict) -> dict:
         resolved["cab_number"] = "N/A"
         
     # Resolve passengers list
+    passenger_statuses = build_passenger_statuses(group.get("passenger_ids", []), group.get("passenger_statuses"))
     resolved_passengers = []
     for pid in group.get("passenger_ids", []):
         passenger = users_col.find_one({"id": pid})
@@ -64,9 +90,11 @@ def resolve_group_details(group: dict) -> dict:
                 "full_name": passenger["full_name"],
                 "email": passenger["email"],
                 "mobile_number": passenger.get("mobile_number"),
-                "pickup_point": passenger.get("pickup_point")
+                "pickup_point": passenger.get("pickup_point"),
+                "trip_status": passenger_statuses.get(pid, default_passenger_status())
             })
     resolved["passengers"] = resolved_passengers
+    resolved["passenger_statuses"] = passenger_statuses
     return resolved
 
 # --- Endpoints ---
@@ -132,6 +160,7 @@ def create_ride_group(payload: RideGroupCreate, current_user: dict = Depends(get
         "name": payload.name,
         "driver_id": payload.driver_id,
         "passenger_ids": payload.passenger_ids,
+        "passenger_statuses": build_passenger_statuses(payload.passenger_ids),
         "pickup_order": [item.dict() for item in payload.pickup_order],
         "drop_order": [item.dict() for item in payload.drop_order],
         "status": payload.status or "draft",
@@ -175,6 +204,10 @@ def update_ride_group(group_id: str, payload: RideGroupUpdate, current_user: dic
         update_data["driver_id"] = payload.driver_id
     if payload.passenger_ids is not None:
         update_data["passenger_ids"] = payload.passenger_ids
+        update_data["passenger_statuses"] = build_passenger_statuses(
+            payload.passenger_ids,
+            existing.get("passenger_statuses")
+        )
     if payload.pickup_order is not None:
         update_data["pickup_order"] = [item.dict() for item in payload.pickup_order]
     if payload.drop_order is not None:
@@ -197,6 +230,70 @@ def update_ride_group(group_id: str, payload: RideGroupUpdate, current_user: dic
         
     updated = ride_groups_col.find_one({"id": group_id})
     return resolve_group_details(updated)
+
+@router.put("/{group_id}/passengers/{passenger_id}/status")
+def update_passenger_status(
+    group_id: str,
+    passenger_id: str,
+    payload: PassengerStatusUpdate,
+    current_user: dict = Depends(get_current_user_from_token)
+):
+    if current_user["role"] != "driver":
+        raise HTTPException(status_code=403, detail="Only drivers can update passenger trip status")
+
+    existing = ride_groups_col.find_one({"id": group_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Ride group not found")
+    if existing.get("driver_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Drivers can only update passengers on their assigned ride")
+    if passenger_id not in existing.get("passenger_ids", []):
+        raise HTTPException(status_code=404, detail="Passenger is not assigned to this ride")
+    if existing.get("status") in ("draft", "completed"):
+        raise HTTPException(status_code=400, detail="Passenger status can only be updated on an active ride")
+
+    target_status = payload.status
+    if target_status not in ("picked_up", "dropped"):
+        raise HTTPException(status_code=400, detail="Invalid passenger status")
+
+    passenger_statuses = build_passenger_statuses(
+        existing.get("passenger_ids", []),
+        existing.get("passenger_statuses")
+    )
+    if existing.get("passenger_statuses") != passenger_statuses:
+        ride_groups_col.update_one(
+            {"id": group_id},
+            {"$set": {"passenger_statuses": passenger_statuses}}
+        )
+
+    current_status = passenger_statuses[passenger_id].get("status", "pending")
+    now = datetime.datetime.utcnow().isoformat()
+    next_status = dict(passenger_statuses[passenger_id])
+
+    if target_status == "picked_up":
+        if current_status != "pending":
+            raise HTTPException(status_code=400, detail="Passenger can only be picked up once")
+        next_status["status"] = "picked_up"
+        next_status["picked_up_at"] = now
+    elif target_status == "dropped":
+        if current_status == "pending":
+            raise HTTPException(status_code=400, detail="Passenger must be picked up before drop")
+        if current_status == "dropped":
+            raise HTTPException(status_code=400, detail="Passenger can only be dropped once")
+        next_status["status"] = "dropped"
+        next_status["dropped_at"] = now
+
+    result = ride_groups_col.update_one(
+        {"id": group_id, f"passenger_statuses.{passenger_id}.status": current_status},
+        {"$set": {f"passenger_statuses.{passenger_id}": next_status}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=400, detail="Passenger status has already changed")
+
+    return {
+        "ride_group_id": group_id,
+        "passenger_id": passenger_id,
+        **next_status
+    }
 
 @router.delete("/{group_id}")
 def delete_ride_group(group_id: str, current_user: dict = Depends(get_current_user_from_token)):
