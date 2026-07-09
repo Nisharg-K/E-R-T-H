@@ -32,6 +32,7 @@ const state = {
   routeLayers: [],
   driverWs: null,
   allEmployeesMap: null,
+  allEmployeeMarkers: [],
   geolocationWatchId: null,
 };
 
@@ -1578,6 +1579,15 @@ function setupSupervisorTabs() {
   });
 }
 
+function getInitials(fullName) {
+  if (!fullName) return "??";
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 function initAllEmployeesMap() {
   if (!window.L || !byId("allEmployeesMap")) return;
 
@@ -1595,6 +1605,9 @@ function initAllEmployeesMap() {
       }
     });
   }
+
+  // Clear tracked markers array
+  state.allEmployeeMarkers = [];
 
   // Draw office marker
   const officeCoord = [22.32414, 73.16594];
@@ -1618,12 +1631,14 @@ function initAllEmployeesMap() {
       const coord = [pk.latitude, pk.longitude];
       markerBounds.push(coord);
 
-      L.marker(coord, {
+      const initials = getInitials(e.full_name);
+
+      const marker = L.marker(coord, {
         icon: L.divIcon({
           className: 'passenger-marker-icon',
-          html: `<div style="background-color: var(--accent); color: #000; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #000; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 0.85rem;">👤</div>`,
-          iconSize: [24, 24],
-          iconAnchor: [12, 12]
+          html: `<div class="passenger-initials-badge" style="background-color: var(--accent); color: #000; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; border: 2px solid #000; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-size: 0.85rem; font-family: 'Inter', sans-serif;">${initials}</div>`,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15]
         })
       })
       .addTo(state.allEmployeesMap)
@@ -1633,7 +1648,19 @@ function initAllEmployeesMap() {
         <span style="color: #444;">EMP ID: ${e.employee_id || "N/A"}</span><br>
         <span style="color: #444;">Dept: ${e.department || "N/A"}</span><br>
         <span style="color: #444;">Location: ${pk.label || "Home"}</span>
-      `);
+      `)
+      .bindTooltip(e.full_name, {
+        permanent: false,
+        direction: 'top',
+        className: 'marker-hover-tooltip'
+      });
+
+      state.allEmployeeMarkers.push({
+        employeeId: e.employee_id,
+        fullName: e.full_name,
+        email: e.email,
+        marker: marker
+      });
     }
   });
 
@@ -1642,6 +1669,48 @@ function initAllEmployeesMap() {
     state.allEmployeesMap.fitBounds(markerBounds, { padding: [50, 50] });
   } else {
     state.allEmployeesMap.setView(officeCoord, 12);
+  }
+
+  // Bind Search events
+  const searchInput = byId("employeeSearchInput");
+  const searchBtn = byId("employeeSearchBtn");
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = "true";
+
+    const performSearch = () => {
+      const query = searchInput.value.trim().toLowerCase();
+      if (!query) return;
+
+      const found = state.allEmployeeMarkers.find(item => 
+        item.fullName.toLowerCase().includes(query) || 
+        (item.employeeId && item.employeeId.toLowerCase().includes(query)) ||
+        (item.email && item.email.toLowerCase().includes(query))
+      );
+
+      if (found) {
+        state.allEmployeesMap.setView(found.marker.getLatLng(), 16);
+        found.marker.openPopup();
+        const el = found.marker.getElement();
+        if (el) {
+          el.classList.remove("marker-highlight-pulse");
+          void el.offsetWidth; // trigger reflow
+          el.classList.add("marker-highlight-pulse");
+          setTimeout(() => {
+            el.classList.remove("marker-highlight-pulse");
+          }, 2500);
+        }
+      } else {
+        searchInput.style.borderColor = "#ff4d4d";
+        setTimeout(() => {
+          searchInput.style.borderColor = "var(--border)";
+        }, 1500);
+      }
+    };
+
+    searchBtn?.addEventListener("click", performSearch);
+    searchInput.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") performSearch();
+    });
   }
 }
 

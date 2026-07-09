@@ -32,6 +32,10 @@
     <main class="app-main">
       <header class="app-header"><div><p class="eyebrow">Admin dashboard</p><h1>All Employee Pickup Locations</h1></div></header>
       <section class="card span-3 map-full" style="height: calc(100vh - 180px); min-height: 550px; display: flex; flex-direction: column;">
+        <div class="map-search-bar" style="margin: 16px 16px 12px 16px; display: flex; gap: 8px;">
+          <input type="text" id="employeeSearchInput" placeholder="Search employee by name, ID, or email..." style="flex: 1; padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border); background-color: rgba(0,0,0,0.6); color: var(--text); font-family: inherit; font-size: 0.9rem;" />
+          <button type="button" id="employeeSearchBtn" class="primary-button" style="padding: 10px 20px; width: auto;">Search</button>
+        </div>
         <div id="allEmployeesMap" class="map-surface" style="flex: 1; min-height: 480px; border-radius: 10px; border: 1px solid var(--border);"></div>
       </section>
     </main>
