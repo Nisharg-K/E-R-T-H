@@ -5,7 +5,17 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 .env
+.env.*
 changelog.txt
 project_context.txt
 Base/
+node_modules/
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+CHANGELOG.md
+

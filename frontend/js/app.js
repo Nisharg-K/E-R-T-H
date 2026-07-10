@@ -34,6 +34,10 @@ const state = {
   allEmployeesMap: null,
   allEmployeeMarkers: [],
   geolocationWatchId: null,
+  routeRequestId: 0,
+  activeTrackingMarkers: [],
+  rideProgressByDriver: {},
+  supervisorRideProgressPoll: null,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -123,9 +127,38 @@ function ensureMap() {
   state.mapReady = true;
 }
 
+function getDriverMarkerGroupKey(marker) {
+  const lat = Math.round(Number(marker.latitude) * 10000);
+  const lng = Math.round(Number(marker.longitude) * 10000);
+  return `${lat}:${lng}`;
+}
+
+function getSeparatedDriverMarkerLatLng(marker, index, markers) {
+  if (state.currentUser?.role !== "supervisor") {
+    return [marker.latitude, marker.longitude];
+  }
+
+  const groupKey = getDriverMarkerGroupKey(marker);
+  const group = markers.filter(item => getDriverMarkerGroupKey(item) === groupKey);
+  if (group.length <= 1) {
+    return [marker.latitude, marker.longitude];
+  }
+
+  const groupIndex = group.findIndex(item => item.driver_id === marker.driver_id);
+  const offsetIndex = groupIndex >= 0 ? groupIndex : index;
+  const angle = (Math.PI * 2 * offsetIndex) / group.length;
+  const radius = 0.00008;
+  const latOffset = Math.sin(angle) * radius;
+  const lngScale = Math.max(Math.cos(Number(marker.latitude) * Math.PI / 180), 0.3);
+  const lngOffset = (Math.cos(angle) * radius) / lngScale;
+
+  return [Number(marker.latitude) + latOffset, Number(marker.longitude) + lngOffset];
+}
+
 function updateMap(markers) {
   ensureMap();
   if (!state.mapReady || !state.map) return;
+  state.activeTrackingMarkers = markers || [];
 
   // Clear previous driver/cab markers
   state.markers.forEach((marker) => marker.remove());
@@ -136,16 +169,22 @@ function updateMap(markers) {
     state.routeLayers.forEach(layer => layer.remove());
   }
   state.routeLayers = [];
+  state.routeRequestId += 1;
+  const routeRequestId = state.routeRequestId;
 
   const role = state.currentUser?.role;
 
   // --- Role 1: Admin or Supervisor ---
   if (role === "admin" || role === "supervisor") {
     // Live location of all active cabs
-    state.markers = markers.map((marker) => (
-      L.marker([marker.latitude, marker.longitude])
+    state.markers = markers.map((marker, index) => (
+      L.marker(getSeparatedDriverMarkerLatLng(marker, index, markers), {
+        driver_id: marker.driver_id,
+        driver_name: marker.driver_name,
+        cab_number: marker.cab_number,
+      })
         .addTo(state.map)
-        .bindPopup(`<strong>${marker.driver_name}</strong><br>${marker.cab_number || "Cab"}<br>${marker.recorded_at}`)
+        .bindPopup(renderActiveDriverPopup(marker))
     ));
 
     // Center on first marker if not centered yet
@@ -182,23 +221,29 @@ function updateMap(markers) {
         pathCoords.push(state.driverLatLng);
       }
 
-      // Add passenger pickup coordinates and plot numbered markers
-      if (ride.pickup_order && ride.pickup_order.length > 0) {
-        ride.pickup_order.forEach(p => {
+      const pendingPickupOrder = (ride.pickup_order || []).filter(p => {
+        const tripStatus = getPassengerTripStatus(p);
+        return (tripStatus.status || "pending") === "pending";
+      });
+
+      // Add only pending passenger pickup coordinates and plot renumbered markers
+      if (pendingPickupOrder.length > 0) {
+        pendingPickupOrder.forEach((p, index) => {
           if (p.latitude && p.longitude) {
+            const visibleOrder = index + 1;
             const coord = [p.latitude, p.longitude];
             pathCoords.push(coord);
 
             const passengerMarker = L.marker(coord, {
               icon: L.divIcon({
                 className: 'passenger-marker-icon',
-                html: `<div style="background-color: var(--accent); color: #000; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #000; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 0.85rem;">${p.order}</div>`,
+                html: `<div style="background-color: var(--accent); color: #000; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #000; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 0.85rem;">${visibleOrder}</div>`,
                 iconSize: [24, 24],
                 iconAnchor: [12, 12]
               })
             })
             .addTo(state.map)
-            .bindPopup(`<strong>Pickup #${p.order}</strong><br>${p.full_name}<br>${p.pickup_label}`);
+            .bindPopup(`<strong>Pickup #${visibleOrder}</strong><br>${p.full_name}<br>${p.pickup_label}`);
 
             state.routeLayers.push(passengerMarker);
           }
@@ -207,7 +252,6 @@ function updateMap(markers) {
 
       // Add Office destination marker
       const officeCoord = [22.32414, 73.16594];
-      pathCoords.push(officeCoord);
 
       const officeMarker = L.marker(officeCoord, {
         icon: L.divIcon({
@@ -223,8 +267,8 @@ function updateMap(markers) {
       state.routeLayers.push(officeMarker);
 
       // Draw snapped path
-      if (pathCoords.length >= 2) {
-        drawRoadRoute(pathCoords);
+      if (state.driverLatLng && pathCoords.length >= 2) {
+        drawRoadRoute(pathCoords, routeRequestId);
       }
     }
   }
@@ -286,7 +330,7 @@ function updateMap(markers) {
   }
 }
 
-async function drawRoadRoute(coordsLatLng) {
+async function drawRoadRoute(coordsLatLng, routeRequestId = state.routeRequestId) {
   // OSRM expects lon,lat order
   const waypoints = coordsLatLng.map(c => `${c[1]},${c[0]}`).join(";");
   const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${waypoints}?overview=full&geometries=geojson`;
@@ -296,6 +340,7 @@ async function drawRoadRoute(coordsLatLng) {
   try {
     const response = await fetch(osrmUrl);
     const data = await response.json();
+    if (routeRequestId !== state.routeRequestId) return;
 
     if (data.code === "Ok" && data.routes && data.routes[0]) {
       const geojson = data.routes[0].geometry;
@@ -326,6 +371,7 @@ async function drawRoadRoute(coordsLatLng) {
 
   // Fallback: straight dashed polyline if OSRM is unavailable
   if (!routeDrawn) {
+    if (routeRequestId !== state.routeRequestId) return;
     const fallbackLine = L.polyline(coordsLatLng, {
       color: "#FFDE00",
       weight: 5,
@@ -511,14 +557,7 @@ function startTrackingWebSocket() {
         }
       } else if (msg.driver_id) {
         // Single driver location push — merge into current markers
-        const currentMarkers = state.markers.map(m => ({
-          driver_id: m.options?.driver_id,
-          driver_name: m.options?.driver_name,
-          cab_number: m.options?.cab_number,
-          latitude: m.getLatLng()?.lat,
-          longitude: m.getLatLng()?.lng,
-          recorded_at: "Just now"
-        })).filter(m => m.driver_id);
+        const currentMarkers = [...state.activeTrackingMarkers];
         const idx = currentMarkers.findIndex(m => m.driver_id === msg.driver_id);
         if (idx >= 0) currentMarkers[idx] = msg;
         else currentMarkers.push(msg);
@@ -833,6 +872,128 @@ function pickCurrentRide(rides) {
   return rides.find((ride) => ride.status === "ongoing" || ride.status === "started") || rides[0] || null;
 }
 
+function isActiveRide(ride) {
+  return ride && (ride.status === "ongoing" || ride.status === "started");
+}
+
+function getPassengerTripStatus(passenger) {
+  return passenger.trip_status || { status: "pending", picked_up_at: null, dropped_at: null };
+}
+
+function formatPassengerStatus(status) {
+  const labels = {
+    pending: "Pending",
+    picked_up: "Picked Up",
+    dropped: "Dropped",
+  };
+  return labels[status] || "Pending";
+}
+
+function getPassengerProgressIcon(status) {
+  if (status === "dropped") return "✅";
+  if (status === "picked_up") return "🚕";
+  return "⏳";
+}
+
+function getPassengerProgressLabel(status) {
+  if (status === "dropped") return "Dropped";
+  if (status === "picked_up") return "In Transit";
+  return "Pending";
+}
+
+function setRideProgressCache(rides) {
+  const cache = {};
+  (rides || []).forEach((ride) => {
+    if (isActiveRide(ride) && ride.assigned_driver_id) {
+      cache[ride.assigned_driver_id] = ride;
+    }
+  });
+  state.rideProgressByDriver = cache;
+}
+
+async function refreshSupervisorRideProgress() {
+  if (state.currentUser?.role !== "supervisor") return;
+  const rides = await api("/api/v1/rides?limit=100").catch(() => null);
+  const ridesList = Array.isArray(rides) ? rides : (rides?.items || []);
+  setRideProgressCache(ridesList);
+}
+
+function startSupervisorRideProgressPolling() {
+  if (state.supervisorRideProgressPoll) clearInterval(state.supervisorRideProgressPoll);
+  if (state.currentUser?.role !== "supervisor") return;
+  state.supervisorRideProgressPoll = window.setInterval(async () => {
+    await refreshSupervisorRideProgress();
+    if (state.activeTrackingMarkers.length) {
+      updateMap(state.activeTrackingMarkers);
+    }
+  }, 10000);
+}
+
+function renderActiveDriverPopup(marker) {
+  const baseHtml = `<strong>${marker.driver_name}</strong><br>Driver ID: ${marker.driver_id || "N/A"}<br>${marker.cab_number || "Cab"}<br>${marker.recorded_at}`;
+  if (state.currentUser?.role !== "supervisor") return baseHtml;
+
+  const ride = state.rideProgressByDriver[marker.driver_id];
+  if (!ride) return baseHtml;
+
+  const passengers = ride.pickup_order || [];
+  const counts = passengers.reduce((acc, passenger) => {
+    const status = getPassengerTripStatus(passenger).status || "pending";
+    if (status === "picked_up") acc.pickedUp += 1;
+    else if (status === "dropped") acc.dropped += 1;
+    else acc.pending += 1;
+    return acc;
+  }, { pickedUp: 0, dropped: 0, pending: 0 });
+
+  const passengerList = passengers.length
+    ? passengers.map((passenger) => {
+      const status = getPassengerTripStatus(passenger).status || "pending";
+      return `<div>${getPassengerProgressIcon(status)} ${passenger.full_name || "Passenger"} (${getPassengerProgressLabel(status)})</div>`;
+    }).join("")
+    : "<div>No passengers assigned</div>";
+
+  return `
+    ${baseHtml}
+    <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #ddd;">
+      <strong>Ride Details:</strong><br>
+      Total Passengers: ${passengers.length}<br>
+      Picked Up Count: ${counts.pickedUp}<br>
+      Dropped Count: ${counts.dropped}<br>
+      Pending Count: ${counts.pending}
+    </div>
+    <div style="margin-top: 8px;">
+      <strong>Passenger List:</strong>
+      <div style="margin-top: 4px; line-height: 1.35;">${passengerList}</div>
+    </div>
+  `;
+}
+
+function renderPassengerStatusAction(ride, passenger) {
+  if (!state.currentUser || state.currentUser.role !== "driver") return "";
+
+  const tripStatus = getPassengerTripStatus(passenger);
+  const status = tripStatus.status || "pending";
+  const baseStyle = "padding: 5px 10px; font-size: 0.8rem; min-width: 86px;";
+
+  if (status === "dropped") {
+    return `<button type="button" class="ghost-button" disabled style="${baseStyle} opacity: 0.6; cursor: not-allowed;">Completed</button>`;
+  }
+
+  const nextStatus = status === "picked_up" ? "dropped" : "picked_up";
+  const label = status === "picked_up" ? "Drop" : "Pick Up";
+  const buttonClass = status === "picked_up" ? "ghost-button" : "primary-button";
+  return `
+    <button
+      type="button"
+      class="${buttonClass}"
+      data-passenger-status="${nextStatus}"
+      data-ride-id="${ride.id}"
+      data-passenger-id="${passenger.user_id}"
+      style="${baseStyle}"
+    >${label}</button>
+  `;
+}
+
 function renderCurrentRide(containerId, ride, label) {
   const container = byId(containerId);
   if (!container) return;
@@ -849,7 +1010,15 @@ function renderCurrentRide(containerId, ride, label) {
     const listItems = ride.pickup_order.map(p => {
       const isMe = state.currentUser && state.currentUser.id === p.user_id;
       const display = `${p.full_name} (${p.pickup_label || "No Location set"})`;
-      return `<li>${isMe ? `<strong>${display} (You)</strong>` : display}</li>`;
+      const tripStatus = getPassengerTripStatus(p);
+      return `
+        <li style="margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <span>${isMe ? `<strong>${display} (You)</strong>` : display}<br><small>Status: ${formatPassengerStatus(tripStatus.status)}</small></span>
+            ${renderPassengerStatusAction(ride, p)}
+          </div>
+        </li>
+      `;
     }).join("");
     sequenceHtml += `
       <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
@@ -1417,6 +1586,18 @@ async function updateRideGroupStatus(groupId, newStatus, delayMinutes = null) {
   }
 }
 
+async function updatePassengerTripStatus(groupId, passengerId, status, filterFn) {
+  try {
+    await api(`/api/v1/ride-groups/${groupId}/passengers/${passengerId}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    });
+    await loadRoleRidePage(filterFn);
+  } catch (err) {
+    alert(`Failed to update passenger status: ${normalizeErrorMessage(parseApiError(err))}`);
+  }
+}
+
 async function loadRoleRidePage(filterFn) {
   await loadCurrentUser();
   initDashboardDate();
@@ -1459,8 +1640,13 @@ async function loadRoleRidePage(filterFn) {
       const completeId = e.target.dataset.completeRide;
       const delayId = e.target.dataset.delayRide;
       const delayVal = e.target.dataset.delayVal;
+      const passengerStatus = e.target.dataset.passengerStatus;
+      const passengerRideId = e.target.dataset.rideId;
+      const passengerId = e.target.dataset.passengerId;
       
-      if (startId) {
+      if (passengerStatus && passengerRideId && passengerId) {
+        await updatePassengerTripStatus(passengerRideId, passengerId, passengerStatus, filterFn);
+      } else if (startId) {
         await api(`/api/v1/ride-groups/${startId}`, {
           method: "PUT",
           body: JSON.stringify({ status: "started" }),
@@ -1867,10 +2053,11 @@ async function loadSupervisorPage(groupPage = 1) {
   await loadCurrentUser();
   initDashboardDate();
   
-  const [employees, drivers, groupsRes, active, notifications] = await Promise.all([
+  const [employees, drivers, groupsRes, ridesRes, active, notifications] = await Promise.all([
     api("/api/v1/ride-groups/employees").catch(() => []),
     api("/api/v1/ride-groups/drivers").catch(() => []),
     api(`/api/v1/ride-groups?page=${groupPage}&limit=10`).catch(() => ({ items: [], total: 0, page: 1, pages: 1 })),
+    api("/api/v1/rides?limit=100").catch(() => ({ items: [] })),
     api("/api/v1/tracking/active").catch(() => []),
     api("/api/v1/notifications").catch(() => []),
   ]);
@@ -1881,6 +2068,7 @@ async function loadSupervisorPage(groupPage = 1) {
   supervisorEmployees = employees;
   supervisorDrivers = drivers;
   supervisorGroups = groups;
+  setRideProgressCache(Array.isArray(ridesRes) ? ridesRes : (ridesRes.items || []));
   
   if (byId("metricGroups")) byId("metricGroups").textContent = groupsRes.total ?? groups.length;
   if (byId("metricEmployees")) byId("metricEmployees").textContent = employees.length;
@@ -1941,6 +2129,7 @@ async function loadSupervisorPage(groupPage = 1) {
   }
 
   updateMap(active || []);
+  startSupervisorRideProgressPolling();
   startTrackingWebSocket();
 }
 

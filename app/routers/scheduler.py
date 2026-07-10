@@ -8,6 +8,7 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from app.core.database import ride_groups_col
+from app.routers.ride_groups import build_passenger_statuses
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ def spawn_recurring_rides():
             "name": f"{template['name']} — {today_date}",
             "driver_id": template["driver_id"],
             "passenger_ids": template["passenger_ids"],
+            "passenger_statuses": build_passenger_statuses(template["passenger_ids"]),
             "pickup_order": template.get("pickup_order", []),
             "drop_order": template.get("drop_order", []),
             "status": "pending",
