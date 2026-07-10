@@ -28,7 +28,20 @@
       </div>
     </aside>
     <main class="app-main">
-      <header class="app-header"><div><p class="eyebrow">Admin dashboard</p><h1>Ride Groups</h1></div></header>
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Admin dashboard</p>
+          <h1>Ride Groups</h1>
+        </div>
+        <div class="site-actions" style="display: flex; gap: 12px; align-items: center;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <label for="routeFilterDate" style="margin: 0; font-size: 0.85rem; white-space: nowrap; color: var(--text);">Route Date:</label>
+            <input type="date" id="routeFilterDate" style="width: auto; padding: 4px 8px; margin: 0; font-size: 0.85rem; height: auto;" />
+            <span id="routeDateDisplay" style="font-size: 0.85rem; color: var(--muted); min-width: 120px;"></span>
+          </div>
+          <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
+        </div>
+      </header>
       <section class="card"><div class="table-shell" id="ridesTable"></div><div id="ridesPagination"></div></section>
     </main>
   </div>

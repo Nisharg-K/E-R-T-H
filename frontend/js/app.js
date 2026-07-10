@@ -97,6 +97,22 @@ function updateSessionBadge() {
   }
 }
 
+function initDashboardDate() {
+  const dateDisplay = byId("dashboardDate");
+  const routeDateDisplay = byId("routeDateDisplay");
+  
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  
+  if (dateDisplay) {
+    dateDisplay.textContent = dateStr;
+  }
+  
+  if (routeDateDisplay) {
+    routeDateDisplay.textContent = dateStr;
+  }
+}
+
 function ensureMap() {
   if (state.mapReady || !window.L || !byId("liveMap")) return;
   state.map = L.map("liveMap").setView([22.32414, 73.16594], 12);
@@ -472,6 +488,27 @@ function startTrackingWebSocket() {
         updateMap(msg.data || []);
       } else if (msg.type === "ping") {
         // keepalive — no action needed
+      } else if (msg.type === "route_change") {
+        // Route change notification - refresh the relevant role's dashboard
+        console.log("[WS] Route change received:", msg);
+        const role = state.currentUser && state.currentUser.role;
+        if (role === "driver") {
+          // Only refresh if this route change affects the current driver
+          if (msg.driver_id && msg.driver_id === state.currentUser.id) {
+            console.log("[WS] Refreshing driver route due to passenger availability change");
+            loadRoleRidePage(filterDriverRides).catch(err => {
+              console.error("[WS] Error refreshing driver route:", err);
+            });
+          }
+        } else if (role === "supervisor") {
+          console.log("[WS] Refreshing supervisor page due to route change");
+          loadSupervisorPage().catch(err => {
+            console.error("[WS] Error refreshing supervisor page:", err);
+          });
+        } else if (role === "admin") {
+          console.log("[WS] Refreshing admin page due to route change");
+          loadAllAvailabilityLogs().catch(() => {});
+        }
       } else if (msg.driver_id) {
         // Single driver location push — merge into current markers
         const currentMarkers = state.markers.map(m => ({
@@ -805,18 +842,35 @@ function renderCurrentRide(containerId, ride, label) {
   }
 
   let sequenceHtml = "";
-  if (ride.pickup_order && ride.pickup_order.length > 0) {
+  const hasPickup = ride.pickup_order && ride.pickup_order.length > 0;
+  const hasDrop = ride.drop_order && ride.drop_order.length > 0;
+
+  if (hasPickup) {
     const listItems = ride.pickup_order.map(p => {
       const isMe = state.currentUser && state.currentUser.id === p.user_id;
       const display = `${p.full_name} (${p.pickup_label || "No Location set"})`;
       return `<li>${isMe ? `<strong>${display} (You)</strong>` : display}</li>`;
     }).join("");
-    sequenceHtml = `
+    sequenceHtml += `
       <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
         <strong style="font-size: 0.85rem; color: var(--muted);">Pickup Sequence:</strong>
         <ol style="margin: 4px 0 0 16px; font-size: 0.85rem; line-height: 1.4;">
           ${listItems}
         </ol>
+      </div>
+    `;
+  } else {
+    sequenceHtml += `
+      <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
+        <p style="font-size: 0.85rem; color: var(--muted); margin: 0;">No pickup stops are required for this trip.</p>
+      </div>
+    `;
+  }
+
+  if (!hasDrop) {
+    sequenceHtml += `
+      <div style="margin-top: 8px;">
+        <p style="font-size: 0.85rem; color: var(--muted); margin: 0;">No drop stops are required for this trip.</p>
       </div>
     `;
   }
@@ -871,8 +925,72 @@ function filterEscortRides(rides) {
   return state.currentUser ? rides.filter((ride) => ride.escort_user_id === state.currentUser.id) : [];
 }
 
+async function loadAllAvailabilityLogs() {
+  const container = byId("unavailabilityTable");
+  if (!container) return;
+
+  try {
+    container.innerHTML = '<p class="code-block">Loading...</p>';
+    const data = await api("/api/v1/availability");
+    const logs = (data && data.items) ? data.items : (Array.isArray(data) ? data : []);
+
+    if (!logs.length) {
+      container.innerHTML = '<p class="code-block">No unavailability logs found.</p>';
+      return;
+    }
+
+    const rows = logs.map(item => {
+      const dateStr = item.date.split('T')[0];
+      const [year, month, day] = dateStr.split('-');
+      const dateObj = new Date(year, parseInt(month) - 1, parseInt(day));
+      const date = dateObj.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+      let statusBadge = '';
+      if (item.no_cab_required) {
+        statusBadge = '<span class="tag" style="background:#ff7d4d;">No Cab Required</span>';
+      } else if (item.pickup_not_needed && item.drop_not_needed) {
+        statusBadge = '<span class="tag" style="background:#ff7d4d;">No Cab Required</span>';
+      } else if (item.pickup_not_needed) {
+        statusBadge = '<span class="tag" style="background:#ffcc00;color:#000;">Pickup Not Needed</span>';
+      } else if (item.drop_not_needed) {
+        statusBadge = '<span class="tag" style="background:#ffcc00;color:#000;">Drop Not Needed</span>';
+      } else {
+        statusBadge = '<span class="tag">Normal Service</span>';
+      }
+      const updatedAt = item.updated_at ? new Date(item.updated_at).toLocaleString() : '—';
+      return `
+        <tr>
+          <td><strong>${item.employee_name || '—'}</strong></td>
+          <td>${date}</td>
+          <td>${statusBadge}</td>
+          <td style="font-size:0.82rem;color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${item.reason || ''}">${item.reason || '—'}</td>
+          <td style="font-size:0.75rem;color:var(--muted);">${updatedAt}</td>
+        </tr>
+      `;
+    }).join('');
+
+    container.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>Date</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  } catch (err) {
+    container.innerHTML = '<p class="code-block">Error loading unavailability logs.</p>';
+    console.error('[loadAllAvailabilityLogs]', err);
+  }
+}
+
 async function loadAdminPage() {
   await loadCurrentUser();
+  initDashboardDate();
   const [stats, rides, notifications, active, users, approvals] = await Promise.all([
     api("/api/v1/analytics/dashboard").catch(() => ({})),
     api("/api/v1/rides").catch(() => []),
@@ -892,12 +1010,276 @@ async function loadAdminPage() {
   updateMap(active || []);
   startNotificationPolling();
   startTrackingPolling();
+  loadAllAvailabilityLogs().catch(() => {});
 
   const bell = byId("notificationBell");
   if (bell && !bell.dataset.bound) {
     bell.dataset.bound = "true";
     bell.addEventListener("click", () => openNotificationDrawer());
   }
+}
+
+// ─── Availability Form Handler ───
+function initAvailabilityForm() {
+  const form = byId("availabilityForm");
+  const dateInput = byId("availabilityDate");
+  const pickupCheckbox = byId("pickupNotNeeded");
+  const dropCheckbox = byId("dropNotNeeded");
+  const reasonInput = byId("availabilityReason");
+  const statusDiv = byId("availabilityStatus");
+  const deadlineDiv = byId("availabilityDeadline");
+  const resultDiv = byId("availabilityResult");
+  const validationHint = byId("availabilityValidationHint");
+  const informBtn = byId("availabilityInformBtn");
+  const cancelBtn = byId("availabilityCancelBtn");
+  
+  if (!form || !dateInput) return;
+  
+  // Set minimum date to today
+  const today = new Date().toISOString().split('T')[0];
+  dateInput.setAttribute('min', today);
+  
+  // Track current availability state
+  let currentAvailability = null;
+  
+  // Function to update status display
+  async function loadAvailabilityForDate(date) {
+    if (!date) {
+      statusDiv.textContent = "Choose a date to view your current pickup/drop requirement.";
+      deadlineDiv.style.display = "none";
+      cancelBtn.style.display = "none";
+      informBtn.textContent = "Inform";
+      return;
+    }
+    
+    try {
+      statusDiv.textContent = "Loading...";
+      const data = await api(`/api/v1/availability/me?date=${date}`);
+      currentAvailability = data;
+      
+      // Update form state
+      pickupCheckbox.checked = data.pickup_not_needed || false;
+      dropCheckbox.checked = data.drop_not_needed || false;
+      reasonInput.value = data.reason || "";
+      
+      // Build status message
+      let statusMessage = "";
+      if (data.pickup_not_needed && data.drop_not_needed) {
+        statusMessage = "🚫 No Cab Required / On Leave";
+        statusDiv.style.borderColor = "#ff7d4d";
+      } else if (data.pickup_not_needed) {
+        statusMessage = "🚐 Pickup Not Needed (Drop Required)";
+        statusDiv.style.borderColor = "#ffcc00";
+      } else if (data.drop_not_needed) {
+        statusMessage = "🚐 Drop Not Needed (Pickup Required)";
+        statusDiv.style.borderColor = "#ffcc00";
+      } else {
+        statusMessage = "✅ Pickup and Drop Required (Normal Service)";
+        statusDiv.style.borderColor = "#4cff7c";
+      }
+      statusDiv.textContent = statusMessage;
+      
+      // Show/hide cancel button based on existing exception
+      if (data.pickup_not_needed || data.drop_not_needed) {
+        cancelBtn.style.display = "inline-block";
+        informBtn.textContent = "Update";
+      } else {
+        cancelBtn.style.display = "none";
+        informBtn.textContent = "Inform";
+      }
+      
+      // Show deadline info
+      if (data.can_change === false) {
+        deadlineDiv.innerHTML = "⚠️ <strong>Deadline passed:</strong> You cannot modify this exception. Please contact your supervisor.";
+        deadlineDiv.style.color = "#ff7d4d";
+        deadlineDiv.style.display = "block";
+        informBtn.disabled = true;
+        cancelBtn.disabled = true;
+      } else if (data.assigned_driver_id && data.ride_group_id) {
+        deadlineDiv.innerHTML = "ℹ️ You can modify this until 4 hours before the scheduled departure.";
+        deadlineDiv.style.color = "var(--muted)";
+        deadlineDiv.style.display = "block";
+        informBtn.disabled = false;
+        cancelBtn.disabled = false;
+      } else {
+        deadlineDiv.innerHTML = "⚠️ You are not currently assigned to a ride group for this date.";
+        deadlineDiv.style.color = "#ff7d4d";
+        deadlineDiv.style.display = "block";
+        informBtn.disabled = true;
+        cancelBtn.disabled = true;
+      }
+      
+    } catch (err) {
+      statusDiv.textContent = "Error loading availability. Please try again.";
+      statusDiv.style.borderColor = "#ff7d4d";
+      console.error("Error loading availability:", err);
+    }
+  }
+  
+  // Load availability history
+  async function loadAvailabilityHistory() {
+    const container = byId("myUnavailabilityHistoryTable");
+    if (!container) return;
+    
+    try {
+      const history = await api("/api/v1/availability/me/history");
+      
+      if (!history || history.length === 0) {
+        container.innerHTML = '<p class="code-block" style="padding: 8px;">No unavailability history found.</p>';
+        return;
+      }
+      
+      const rows = history.map(item => {
+        const dateStr = item.date.split('T')[0];
+        const [year, month, day] = dateStr.split('-');
+        const dateObj = new Date(year, parseInt(month) - 1, parseInt(day));
+        const date = dateObj.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+        let statusBadge = "";
+        if (item.no_cab_required) {
+          statusBadge = '<span class="tag" style="background: #ff7d4d;">No Cab Required</span>';
+        } else if (item.pickup_not_needed) {
+          statusBadge = '<span class="tag" style="background: #ffcc00; color: #000;">Pickup Not Needed</span>';
+        } else if (item.drop_not_needed) {
+          statusBadge = '<span class="tag" style="background: #ffcc00; color: #000;">Drop Not Needed</span>';
+        }
+        
+        return `
+          <tr>
+            <td>${date}</td>
+            <td>${statusBadge || '<span class="tag">Normal Service</span>'}</td>
+            <td>${item.reason || "—"}</td>
+            <td style="font-size: 0.75rem; color: var(--muted);">${item.updated_at ? new Date(item.updated_at).toLocaleString() : "—"}</td>
+          </tr>
+        `;
+      }).join("");
+      
+      container.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Status</th>
+              <th>Reason</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      `;
+    } catch (err) {
+      container.innerHTML = '<p class="code-block" style="padding: 8px;">Error loading history.</p>';
+      console.error("Error loading availability history:", err);
+    }
+  }
+  
+  // Date change handler
+  dateInput.addEventListener("change", () => {
+    loadAvailabilityForDate(dateInput.value);
+  });
+  
+  // Form submit handler
+  if (!form.dataset.bound) {
+    form.dataset.bound = "true";
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      
+      const date = dateInput.value;
+      if (!date) {
+        resultDiv.style.color = "#ff7d4d";
+        resultDiv.textContent = "Please select a date.";
+        return;
+      }
+      
+      const pickupNotNeeded = pickupCheckbox.checked;
+      const dropNotNeeded = dropCheckbox.checked;
+      
+      // Validate at least one option is selected
+      if (!pickupNotNeeded && !dropNotNeeded) {
+        resultDiv.style.color = "#ff7d4d";
+        resultDiv.textContent = "Please select at least one option: 'Pickup Not Needed' or 'Drop Not Needed'.";
+        return;
+      }
+      
+      // Determine the status for confirmation
+      let statusText = "";
+      if (pickupNotNeeded && dropNotNeeded) {
+        statusText = "No Cab Required / On Leave";
+      } else if (pickupNotNeeded) {
+        statusText = "Pickup Not Needed (Drop service will continue)";
+      } else {
+        statusText = "Drop Not Needed (Pickup service will continue)";
+      }
+      
+      resultDiv.style.color = "var(--text)";
+      resultDiv.textContent = "Submitting...";
+      
+      try {
+        await api("/api/v1/availability/me", {
+          method: "PUT",
+          body: JSON.stringify({
+            date: date,
+            pickup_not_needed: pickupNotNeeded,
+            drop_not_needed: dropNotNeeded,
+            reason: reasonInput.value || null
+          })
+        });
+        
+        resultDiv.style.color = "#4cff7c";
+        resultDiv.textContent = `✓ Successfully informed: ${statusText}`;
+        
+        // Reload the availability and history
+        await loadAvailabilityForDate(date);
+        await loadAvailabilityHistory();
+        
+      } catch (err) {
+        const errorMsg = parseApiError(err);
+        resultDiv.style.color = "#ff7d4d";
+        resultDiv.textContent = normalizeErrorMessage(errorMsg);
+      }
+    });
+  }
+  
+  // Cancel button handler
+  if (cancelBtn && !cancelBtn.dataset.bound) {
+    cancelBtn.dataset.bound = "true";
+    cancelBtn.addEventListener("click", async () => {
+      const date = dateInput.value;
+      if (!date) return;
+      
+      if (!confirm("Are you sure you want to cancel this cab unavailability exception? Your normal pickup and drop service will be restored.")) {
+        return;
+      }
+      
+      resultDiv.style.color = "var(--text)";
+      resultDiv.textContent = "Cancelling...";
+      
+      try {
+        await api(`/api/v1/availability/me/${date}`, {
+          method: "DELETE"
+        });
+        
+        resultDiv.style.color = "#4cff7c";
+        resultDiv.textContent = "✓ Exception cancelled. Normal service restored.";
+        
+        // Reset form and reload
+        pickupCheckbox.checked = false;
+        dropCheckbox.checked = false;
+        reasonInput.value = "";
+        await loadAvailabilityForDate(date);
+        await loadAvailabilityHistory();
+        
+      } catch (err) {
+        const errorMsg = parseApiError(err);
+        resultDiv.style.color = "#ff7d4d";
+        resultDiv.textContent = normalizeErrorMessage(errorMsg);
+      }
+    });
+  }
+  
+  // Load history on init
+  loadAvailabilityHistory();
 }
 
 function initPickupPointSettings() {
@@ -1037,7 +1419,10 @@ async function updateRideGroupStatus(groupId, newStatus, delayMinutes = null) {
 
 async function loadRoleRidePage(filterFn) {
   await loadCurrentUser();
+  initDashboardDate();
   initPickupPointSettings();
+  initAvailabilityForm();
+  
   const [rides, notifications, active] = await Promise.all([
     api("/api/v1/rides?limit=100").catch(() => []),
     api("/api/v1/notifications").catch(() => []),
@@ -1116,6 +1501,7 @@ async function loadAdminOverviewPage() {
 
 async function loadAdminApprovalPage() {
   await loadCurrentUser();
+  initDashboardDate();
   const approvals = await api("/api/v1/auth/pending").catch(() => []);
   renderApprovalsTable("approvalsTable", approvals || []);
   const table = byId("approvalsTable");
@@ -1138,6 +1524,7 @@ async function loadAdminApprovalPage() {
 
 async function loadAdminRidePage(page = 1) {
   await loadCurrentUser();
+  initDashboardDate();
   const res = await api(`/api/v1/rides?page=${page}&limit=10`).catch(() => null);
   const items = res?.items || [];
   const totalPages = res?.pages || 1;
@@ -1147,6 +1534,7 @@ async function loadAdminRidePage(page = 1) {
 
 async function loadAdminPeoplePage(page = 1) {
   await loadCurrentUser();
+  initDashboardDate();
   const res = await api(`/api/v1/users?page=${page}&limit=15`).catch(() => null);
   const items = res?.items || [];
   const totalPages = res?.pages || 1;
@@ -1156,11 +1544,13 @@ async function loadAdminPeoplePage(page = 1) {
 
 async function loadAdminAiPage() {
   await loadCurrentUser();
+  initDashboardDate();
   renderChatShell();
 }
 
 async function loadAdminMapPage() {
   await loadCurrentUser();
+  initDashboardDate();
   const [employees, notifications] = await Promise.all([
     api("/api/v1/ride-groups/employees").catch(() => []),
     api("/api/v1/notifications").catch(() => []),
@@ -1475,6 +1865,7 @@ function setupSupervisorForms() {
 
 async function loadSupervisorPage(groupPage = 1) {
   await loadCurrentUser();
+  initDashboardDate();
   
   const [employees, drivers, groupsRes, active, notifications] = await Promise.all([
     api("/api/v1/ride-groups/employees").catch(() => []),
@@ -1528,11 +1919,25 @@ async function loadSupervisorPage(groupPage = 1) {
   ensureNotificationDrawer();
   updateNotificationState(notifications || []);
   startNotificationPolling();
+  loadAllAvailabilityLogs().catch(() => {});
 
   const bell = byId("notificationBell");
   if (bell && !bell.dataset.bound) {
     bell.dataset.bound = "true";
     bell.addEventListener("click", () => openNotificationDrawer());
+  }
+
+  // Setup unavailability toggle in main dashboard
+  const navUnavailability = byId("navUnavailability");
+  const unavailabilityCard = byId("unavailabilityCard");
+  
+  if (navUnavailability && unavailabilityCard && !navUnavailability.dataset.bound) {
+    navUnavailability.dataset.bound = "true";
+    navUnavailability.addEventListener("click", () => {
+      const isVisible = unavailabilityCard.style.display !== "none";
+      unavailabilityCard.style.display = isVisible ? "none" : "block";
+      navUnavailability.classList.toggle("active");
+    });
   }
 
   updateMap(active || []);

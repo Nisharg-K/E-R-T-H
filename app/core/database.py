@@ -24,6 +24,13 @@ client = MongoClient(MONGO_URI)
 db = client["erth"]
 users_col = db["users"]
 ride_groups_col = db["ride_groups"]
+availability_col = db["employee_availability"]
+notifications_col = db["notifications"]
+
+# Unique constraint: one unavailability record per (employee_id, date)
+# unique=True must match the existing index in MongoDB to avoid IndexKeySpecsConflict on startup
+availability_col.create_index([("employee_id", 1), ("date", 1)], unique=True)
+notifications_col.create_index([("recipient_id", 1), ("created_at", -1)])
 
 # Seed supervisor account if not present
 if not users_col.find_one({"email": "supervisor@aditiconsulting.com"}):
@@ -42,4 +49,4 @@ def clean_user(doc: dict) -> Optional[dict]:
         return None
     doc = dict(doc)
     doc.pop("_id", None)
-    return doc
+    return doc

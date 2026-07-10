@@ -39,6 +39,7 @@
           <span class="brand-mark">ERTH Admin</span>
         </div>
         <div class="top-right-actions">
+          <span id="dashboardDate" style="font-size: 0.85rem; color: var(--muted);"></span>
           <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
           <button id="notificationBell" class="ghost-button notification-bell floating-bell" type="button" aria-label="Notifications">
             <span class="bell-icon" aria-hidden="true"></span>
@@ -58,6 +59,11 @@
         <section class="card span-3 map-full">
           <div class="section-heading"><div><p class="eyebrow">Live tracking</p><h3>Active cab positions</h3></div></div>
           <div id="liveMap" class="map-surface"></div>
+        </section>
+
+        <section class="card span-3">
+          <div class="section-heading"><div><p class="eyebrow">Availability exceptions</p><h3>Employee Unavailability Logs</h3></div></div>
+          <div class="table-shell" id="unavailabilityTable"></div>
         </section>
       </section>
     </main>

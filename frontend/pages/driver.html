@@ -34,7 +34,8 @@
           <p class="eyebrow">Driver dashboard</p>
           <h1>Today's pickups, status, and route tracking</h1>
         </div>
-        <div class="site-actions">
+        <div class="site-actions" style="display: flex; gap: 12px; align-items: center;">
+          <span id="routeDateDisplay" style="font-size: 0.85rem; color: var(--muted);"></span>
           <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
           <button id="notificationBell" class="ghost-button notification-bell" type="button" aria-label="Notifications">
             <span class="bell-icon" aria-hidden="true"></span>
@@ -51,7 +52,14 @@
 
       <section class="dashboard-grid">
         <section class="card span-2">
-          <div class="section-heading"><div><p class="eyebrow">Route</p><h3>Live route map</h3></div></div>
+          <div class="section-heading">
+            <div><p class="eyebrow">Route</p><h3>Live route map</h3></div>
+            <div class="route-mode-switch" aria-label="Route direction">
+              <button type="button" class="ghost-button route-mode-button active" data-route-mode="pickup">Pickup</button>
+              <button type="button" class="ghost-button route-mode-button" data-route-mode="drop">Drop</button>
+            </div>
+          </div>
+          <div id="routeNotice" class="route-notice" style="display: none;"></div>
           <div id="liveMap" class="map-surface"></div>
         </section>
 

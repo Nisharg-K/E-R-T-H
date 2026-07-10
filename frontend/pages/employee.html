@@ -34,7 +34,8 @@
           <p class="eyebrow">Employee dashboard</p>
           <h1>Your cab schedule, live updates, and trip history</h1>
         </div>
-        <div class="site-actions">
+        <div class="site-actions" style="display: flex; gap: 12px; align-items: center;">
+          <span id="routeDateDisplay" style="font-size: 0.85rem; color: var(--muted);"></span>
           <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
           <button id="notificationBell" class="ghost-button notification-bell" type="button" aria-label="Notifications">
             <span class="bell-icon" aria-hidden="true"></span>
@@ -58,6 +59,44 @@
         <section class="card">
           <div class="section-heading"><div><p class="eyebrow">Current ride</p><h3>Trip summary</h3></div></div>
           <div id="currentRideCard" class="list-panel"></div>
+        </section>
+
+        <section class="card span-2">
+          <div class="section-heading"><div><p class="eyebrow">Cab Unavailability</p><h3>Inform Cab Unavailability</h3></div></div>
+          <p style="font-size: 0.85rem; color: var(--muted); margin-bottom: 12px;">Set a date-specific exception without changing your permanent ride group assignment. You must inform at least 4 hours before the scheduled departure time.</p>
+          <form id="availabilityForm" class="auth-form" style="padding: 0;">
+            <div class="form-group">
+              <label for="availabilityDate">Trip date *</label>
+              <input id="availabilityDate" name="date" type="date" required />
+            </div>
+            <div class="availability-toggle-row">
+              <label class="availability-toggle">
+                <input id="pickupNotNeeded" name="pickup_not_needed" type="checkbox" />
+                <span>Pickup Not Needed</span>
+              </label>
+              <label class="availability-toggle">
+                <input id="dropNotNeeded" name="drop_not_needed" type="checkbox" />
+                <span>Drop Not Needed</span>
+              </label>
+            </div>
+            <p id="availabilityValidationHint" style="font-size: 0.75rem; color: var(--muted); margin: 4px 0 0 0; display: none;">⚠️ Please select at least one option to submit.</p>
+            <div class="form-group" style="margin-top: 12px;">
+              <label for="availabilityReason">Reason (optional)</label>
+              <textarea id="availabilityReason" name="reason" placeholder="State reason for unavailability..." style="width: 100%; min-height: 60px; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical;"></textarea>
+            </div>
+            <div id="availabilityStatus" class="code-block">Choose a date to view your current pickup/drop requirement.</div>
+            <div id="availabilityDeadline" style="font-size: 0.75rem; color: var(--muted); margin: 8px 0; display: none;"></div>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+              <button type="submit" class="primary-button" id="availabilityInformBtn">Inform</button>
+              <button type="button" class="ghost-button" id="availabilityCancelBtn" style="display: none;">Cancel Exception</button>
+            </div>
+            <div id="availabilityResult" class="form-result"></div>
+          </form>
+        </section>
+
+        <section class="card span-2">
+          <div class="section-heading"><div><p class="eyebrow">History</p><h3>Your Unavailability History</h3></div></div>
+          <div class="table-shell" id="myUnavailabilityHistoryTable"></div>
         </section>
 
         <section class="card span-2">

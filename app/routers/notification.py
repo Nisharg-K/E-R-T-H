@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.core.auth import get_current_user_from_token
-from app.core.database import ride_groups_col, users_col
+from app.core.database import notifications_col, ride_groups_col, users_col
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["Notifications"])
 
@@ -17,6 +17,16 @@ def get_notifications(current_user: dict = Depends(get_current_user_from_token))
             "is_read": False
         }
     ]
+
+    saved_notifications = list(
+        notifications_col
+        .find({"recipient_id": uid})
+        .sort("created_at", -1)
+        .limit(25)
+    )
+    for item in saved_notifications:
+        item.pop("_id", None)
+        notifications.append(item)
     
     if role == "driver":
         group = ride_groups_col.find_one({"driver_id": uid, "status": {"$ne": "draft"}})
