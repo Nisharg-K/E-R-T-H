@@ -33,6 +33,8 @@ const state = {
   driverWs: null,
   allEmployeesMap: null,
   allEmployeeMarkers: [],
+  pickupMap: null,
+  pickupMarker: null,
   geolocationWatchId: null,
   routeRequestId: 0,
   activeTrackingMarkers: [],
@@ -1463,14 +1465,19 @@ function initPickupPointSettings() {
   const result = byId("pickupResult");
   if (!form || !mapDiv || !window.L) return;
 
-  // Initialize pickup map
-  const pickupMap = L.map("pickupMap").setView([22.3072, 73.1812], 13);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap contributors",
-  }).addTo(pickupMap);
+  // Initialize pickup map in global state
+  if (!state.pickupMap) {
+    state.pickupMap = L.map("pickupMap").setView([22.3072, 73.1812], 13);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(state.pickupMap);
 
-  let pickupMarker = null;
+    // Click-to-place on map
+    state.pickupMap.on("click", (e) => {
+      setPickupLocation(e.latlng.lat, e.latlng.lng);
+    });
+  }
 
   function setPickupLocation(lat, lng) {
     latInput.value = lat.toFixed(6);
@@ -1478,16 +1485,16 @@ function initPickupPointSettings() {
     coordsSpan.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
     saveBtn.disabled = false;
 
-    if (pickupMarker) {
-      pickupMarker.setLatLng([lat, lng]);
+    if (state.pickupMarker) {
+      state.pickupMarker.setLatLng([lat, lng]);
     } else {
-      pickupMarker = L.marker([lat, lng], { draggable: true }).addTo(pickupMap);
-      pickupMarker.on("dragend", () => {
-        const pos = pickupMarker.getLatLng();
+      state.pickupMarker = L.marker([lat, lng], { draggable: true }).addTo(state.pickupMap);
+      state.pickupMarker.on("dragend", () => {
+        const pos = state.pickupMarker.getLatLng();
         setPickupLocation(pos.lat, pos.lng);
       });
     }
-    pickupMap.setView([lat, lng], Math.max(pickupMap.getZoom(), 15));
+    state.pickupMap.setView([lat, lng], Math.max(state.pickupMap.getZoom(), 15));
   }
 
   // Pre-fill from saved data
@@ -1497,13 +1504,9 @@ function initPickupPointSettings() {
     if (saved.label) labelInput.value = saved.label;
   }
 
-  // Click-to-place on map
-  pickupMap.on("click", (e) => {
-    setPickupLocation(e.latlng.lat, e.latlng.lng);
-  });
-
   // GPS one-shot locate
-  if (gpsBtn) {
+  if (gpsBtn && !gpsBtn.dataset.bound) {
+    gpsBtn.dataset.bound = "true";
     gpsBtn.addEventListener("click", () => {
       if (!navigator.geolocation) {
         coordsSpan.textContent = "GPS not supported on this device.";
@@ -1563,7 +1566,7 @@ function initPickupPointSettings() {
   }
 
   // Fix Leaflet rendering in hidden/dynamic containers
-  setTimeout(() => pickupMap.invalidateSize(), 200);
+  setTimeout(() => state.pickupMap.invalidateSize(), 200);
 }
 
 async function updateRideGroupStatus(groupId, newStatus, delayMinutes = null) {
@@ -1596,6 +1599,111 @@ async function updatePassengerTripStatus(groupId, passengerId, status, filterFn)
   } catch (err) {
     alert(`Failed to update passenger status: ${normalizeErrorMessage(parseApiError(err))}`);
   }
+}
+
+function renderRidesCardsList(containerId, rides) {
+  const container = byId(containerId);
+  if (!container) return;
+  if (!rides || rides.length === 0) {
+    container.innerHTML = `<p class="code-block" style="grid-column: span 3; text-align: center;">No ride history available.</p>`;
+    return;
+  }
+
+  const cardsHtml = rides.map(ride => {
+    let sequenceHtml = "";
+    const hasPickup = ride.pickup_order && ride.pickup_order.length > 0;
+    if (hasPickup) {
+      const listItems = ride.pickup_order.map(p => {
+        const isMe = state.currentUser && state.currentUser.id === p.user_id;
+        const display = `${p.full_name} (${p.pickup_label || "No Location set"})`;
+        const tripStatus = getPassengerTripStatus(p);
+        return `
+          <li style="margin-bottom: 4px;">
+            ${isMe ? `<strong>${display} (You)</strong>` : display}<br>
+            <small style="color: var(--muted);">Status: ${formatPassengerStatus(tripStatus.status)}</small>
+          </li>
+        `;
+      }).join("");
+      sequenceHtml += `
+        <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
+          <strong style="font-size: 0.85rem; color: var(--muted);">Pickup Sequence:</strong>
+          <ol style="margin: 4px 0 0 16px; font-size: 0.85rem; line-height: 1.4; color: var(--text);">
+            ${listItems}
+          </ol>
+        </div>
+      `;
+    }
+
+    const tripStatusForMe = (ride.pickup_order || []).find(p => state.currentUser && p.user_id === state.currentUser.id);
+    const boardingStatusLabel = tripStatusForMe ? formatPassengerStatus(getPassengerTripStatus(tripStatusForMe).status) : "Pending";
+
+    return `
+      <div class="card" style="border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: rgba(255,255,255,0.02); display: flex; flex-direction: column; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+          <span class="tag ${ride.status === "completed" ? "muted" : (ride.status === "started" || ride.status === "ongoing" ? "success" : "")}" style="text-transform: uppercase; font-weight: 700; font-size: 0.75rem;">${ride.status}</span>
+          <span style="font-size: 0.8rem; color: var(--muted); font-family: monospace;">${ride.ride_reference}</span>
+        </div>
+        <div>
+          <strong style="font-size: 1.1rem; color: var(--accent); display: block; margin-bottom: 6px;">Trip summary</strong>
+          <div style="font-size: 0.85rem; line-height: 1.5; color: var(--text);">
+            <strong>Driver:</strong> ${ride.driver_name || "Unassigned"} (${ride.cab_number})<br>
+            <strong>Route:</strong> ${ride.pickup_point} to ${ride.drop_point}<br>
+            <strong>Delay:</strong> ${ride.delay_minutes ?? 0} mins<br>
+            <strong>Est. Cost:</strong> ₹${Number(ride.total_cost || 0).toFixed(2)}
+          </div>
+        </div>
+        ${sequenceHtml}
+        <div style="margin-top: 8px; font-size: 0.85rem; font-weight: 600; color: var(--accent); text-align: right;">
+          Status: ${boardingStatusLabel}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  container.innerHTML = `
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; width: 100%;">
+      ${cardsHtml}
+    </div>
+  `;
+}
+
+function setupEmployeeTabs() {
+  const tabs = [
+    { navId: "navCurrentRide", sectionId: "sectionCurrentRide" },
+    { navId: "navRideHistory", sectionId: "sectionRideHistory" },
+    { navId: "navCabUnavailability", sectionId: "sectionCabUnavailability" },
+    { navId: "navDailyPickup", sectionId: "sectionDailyPickup" }
+  ];
+
+  tabs.forEach(tab => {
+    const navEl = byId(tab.navId);
+    if (navEl && !navEl.dataset.bound) {
+      navEl.dataset.bound = "true";
+      navEl.addEventListener("click", (e) => {
+        e.preventDefault();
+        
+        // Remove active class from all nav items
+        tabs.forEach(t => {
+          const el = byId(t.navId);
+          if (el) el.classList.remove("active");
+          const sec = byId(t.sectionId);
+          if (sec) sec.style.display = "none";
+        });
+
+        // Add active class and show section
+        navEl.classList.add("active");
+        const targetSec = byId(tab.sectionId);
+        if (targetSec) targetSec.style.display = "block";
+
+        // Invalidate map sizes
+        if (tab.sectionId === "sectionCurrentRide" && state.map) {
+          setTimeout(() => state.map.invalidateSize(), 100);
+        } else if (tab.sectionId === "sectionDailyPickup" && state.pickupMap) {
+          setTimeout(() => state.pickupMap.invalidateSize(), 100);
+        }
+      });
+    }
+  });
 }
 
 async function loadRoleRidePage(filterFn) {
@@ -1631,6 +1739,11 @@ async function loadRoleRidePage(filterFn) {
 
   renderCurrentRide("currentRideCard", currentRide, "ride");
   renderRidesTable("ridesTable", scopedRides);
+
+  if (state.currentUser && state.currentUser.role === "employee") {
+    setupEmployeeTabs();
+    renderRidesCardsList("ridesCardsList", scopedRides);
+  }
 
   const card = byId("currentRideCard");
   if (card && !card.dataset.bound) {
