@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 # Core internal utility dependencies
 from app.core.database import users_col, clean_user
 from app.core.auth import get_current_user_from_token, generate_token, validate_employee_email
-from app.routers import analytics, rides, tracking, notification, ride_groups, availability
+from app.routers import analytics, availability, calendar, rides, tracking, notification, ride_groups
 from app.routers.scheduler import start_scheduler
 
 _scheduler = None
@@ -186,6 +186,7 @@ app.include_router(tracking.router)
 app.include_router(notification.router)
 app.include_router(ride_groups.router)
 app.include_router(availability.router)
+app.include_router(calendar.router)
 
 # --- Static Frontend Serving ---
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

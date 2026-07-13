@@ -110,8 +110,9 @@
       </a>
       <nav class="nav-list">
         <a class="nav-item active" id="navRideGroups" href="#">Ride Groups</a>
-        <a class="nav-item" id="navEmployeeMap" href="#">Employee Pickup Map</a>
+        <a class="nav-item" id="navEmployeeMap" href="#">Employee Map</a>
         <button type="button" id="navUnavailability" class="nav-item">📋 Unavailability</button>
+        <a class="nav-item" id="navCalendar" href="#">Calendar</a>
       </nav>
       <div class="sidebar-footer">
         <span id="sessionBadge" class="session-badge">Signed out</span>
@@ -123,7 +124,7 @@
       <header class="app-header">
         <div>
           <p class="eyebrow">Supervisor dashboard</p>
-          <h1 id="supervisorTitle">Create ride groups, assign drivers, and manage pickup order</h1>
+          <h1 id="supervisorTitle">Create ride groups, assign drivers, and manage assignments</h1>
         </div>
         <div class="site-actions">
           <span id="dashboardDate" style="font-size: 0.85rem; color: var(--muted);"></span>
@@ -263,6 +264,23 @@
           <div id="allEmployeesMap" class="map-surface" style="flex: 1; min-height: 480px; border-radius: 10px; border: 1px solid var(--border);"></div>
         </section>
       </div>
+
+      <section id="calendarSection" class="card" style="display: none;">
+        <div id="calendarModule" class="calendar-module">
+          <div class="calendar-toolbar">
+            <div><p class="eyebrow">Supervisor calendar</p><h3 id="calendarMonthLabel">Calendar</h3></div>
+            <div id="calendarMonthTabs" class="calendar-month-tabs"></div>
+          </div>
+          <div id="calendarLegend" class="calendar-legend"></div>
+          <div class="calendar-shell">
+            <div id="calendarGrid" class="calendar-grid"></div>
+            <aside class="calendar-side">
+              <div id="calendarRerouteSummary" class="calendar-reroute-summary"></div>
+              <div id="calendarDetails" class="calendar-details"></div>
+            </aside>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 </body>

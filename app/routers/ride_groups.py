@@ -47,7 +47,9 @@ def default_passenger_status() -> dict:
     return {
         "status": "pending",
         "picked_up_at": None,
-        "dropped_at": None
+        "dropped_at": None,
+        "boarded": False,
+        "boarded_at": None
     }
 
 def build_passenger_statuses(passenger_ids: List[str], existing: Optional[dict] = None) -> dict:
@@ -59,7 +61,9 @@ def build_passenger_statuses(passenger_ids: List[str], existing: Optional[dict] 
             statuses[passenger_id] = {
                 "status": current.get("status", "pending"),
                 "picked_up_at": current.get("picked_up_at"),
-                "dropped_at": current.get("dropped_at")
+                "dropped_at": current.get("dropped_at"),
+                "boarded": bool(current.get("boarded", False)),
+                "boarded_at": current.get("boarded_at")
             }
         else:
             statuses[passenger_id] = default_passenger_status()
@@ -238,20 +242,20 @@ def update_passenger_status(
     payload: PassengerStatusUpdate,
     current_user: dict = Depends(get_current_user_from_token)
 ):
-    if current_user["role"] != "driver":
-        raise HTTPException(status_code=403, detail="Only drivers can update passenger trip status")
+    # Pickup/Drop updates are no longer driver-managed. Only supervisors/admins may adjust
+    # historical passenger status fields via this endpoint. Drivers are not permitted to
+    # change per-passenger pickup/drop state; employees mark boarding via the calendar board endpoint.
+    if current_user["role"] not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to update passenger trip status")
 
     existing = ride_groups_col.find_one({"id": group_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Ride group not found")
-    if existing.get("driver_id") != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Drivers can only update passengers on their assigned ride")
     if passenger_id not in existing.get("passenger_ids", []):
         raise HTTPException(status_code=404, detail="Passenger is not assigned to this ride")
-    if existing.get("status") in ("draft", "completed"):
-        raise HTTPException(status_code=400, detail="Passenger status can only be updated on an active ride")
 
     target_status = payload.status
+    # Allow supervisors/admins to set historical statuses only: "picked_up" or "dropped"
     if target_status not in ("picked_up", "dropped"):
         raise HTTPException(status_code=400, detail="Invalid passenger status")
 

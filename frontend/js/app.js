@@ -40,6 +40,9 @@ const state = {
   activeTrackingMarkers: [],
   rideProgressByDriver: {},
   supervisorRideProgressPoll: null,
+  calendarMonth: new Date().toISOString().slice(0, 7),
+  calendarEvents: [],
+  calendarData: null,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -223,38 +226,74 @@ function updateMap(markers) {
         pathCoords.push(state.driverLatLng);
       }
 
-      const pendingPickupOrder = (ride.pickup_order || []).filter(p => {
-        const tripStatus = getPassengerTripStatus(p);
-        return (tripStatus.status || "pending") === "pending";
-      });
+      // Build ordered waypoint list from pickup_order (must include lat/lng)
+      const pickups = (ride.pickup_order || []).filter(p => p.latitude && p.longitude).map(p => ({ user_id: p.user_id, latlng: [p.latitude, p.longitude], full_name: p.full_name }));
 
-      // Add only pending passenger pickup coordinates and plot renumbered markers
-      if (pendingPickupOrder.length > 0) {
-        pendingPickupOrder.forEach((p, index) => {
-          if (p.latitude && p.longitude) {
-            const visibleOrder = index + 1;
-            const coord = [p.latitude, p.longitude];
-            pathCoords.push(coord);
-
-            const passengerMarker = L.marker(coord, {
-              icon: L.divIcon({
-                className: 'passenger-marker-icon',
-                html: `<div style="background-color: var(--accent); color: #000; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #000; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 0.85rem;">${visibleOrder}</div>`,
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
-              })
-            })
-            .addTo(state.map)
-            .bindPopup(`<strong>Pickup #${visibleOrder}</strong><br>${p.full_name}<br>${p.pickup_label}`);
-
-            state.routeLayers.push(passengerMarker);
-          }
-        });
-      }
-
-      // Add Office destination marker
+      // Office destination
       const officeCoord = [22.32414, 73.16594];
 
+      // Add passenger waypoints to pathCoords
+      pickups.forEach(p => pathCoords.push(p.latlng));
+      // Finally add office
+      pathCoords.push(officeCoord);
+
+      // Draw per-segment polylines to show progression: completed / active / upcoming
+      // Determine boarded state per passenger
+      const passengerBoarded = (userId) => {
+        const statuses = ride.passengers || [];
+        const found = statuses.find(s => (s.id === userId || s.passenger_user_id === userId || s.user_id === userId));
+        return !!(found && found.trip_status && found.trip_status.boarded);
+      };
+
+      // Find index of first not-boarded passenger -> active pickup index
+      let activeIndex = pickups.findIndex(p => !passengerBoarded(p.user_id));
+      if (activeIndex === -1) activeIndex = pickups.length; // no active pickups, next is office
+
+      // Leg sequence: Driver -> pickup0 -> pickup1 -> ... -> office
+      const legs = [];
+      const origin = state.driverLatLng || (pickups.length ? pickups[0].latlng : null);
+      if (origin) {
+        // driver to first pickup (or office if none)
+        let prev = origin;
+        for (let i = 0; i < pickups.length; i++) {
+          legs.push({ from: prev, to: pickups[i].latlng, passenger: pickups[i], index: i });
+          prev = pickups[i].latlng;
+        }
+        // last leg to office
+        legs.push({ from: prev, to: officeCoord, passenger: null, index: pickups.length });
+      }
+
+      // Draw active leg in yellow and upcoming legs as lighter yellow; skip completed legs
+      legs.forEach((leg) => {
+        if (leg.index < activeIndex) return; // completed -> do not render
+        if (leg.index === activeIndex) {
+          // active leg -> bright yellow
+          drawRoadRouteSegment(leg.from, leg.to, { color: '#FFDE00', weight: 6, opacity: 0.95 }, routeRequestId).catch(() => {});
+        } else {
+          // upcoming legs -> faint yellow
+          drawRoadRouteSegment(leg.from, leg.to, { color: '#FFDE00', weight: 4, opacity: 0.38 }, routeRequestId).catch(() => {});
+        }
+      });
+
+      // If all pickups are boarded and ride is completed, draw the full route and keep it yellow
+      if (activeIndex >= pickups.length && ride.status === 'completed') {
+        if (state.driverLatLng && pathCoords.length >= 2) {
+          drawRoadRoute(pathCoords, routeRequestId).catch(() => {});
+        }
+      }
+
+      // Place passenger markers only for not-boarded passengers (skip green ticks for boarded)
+      pickups.forEach((p, idx) => {
+        const boarded = passengerBoarded(p.user_id);
+        if (boarded) return; // do not render a green tick marker for boarded passengers
+        const pinHtml = `<div style="background-color:#ffcc00;color:#000;width:18px;height:18px;border-radius:9px;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-size:0.7rem;">●</div>`;
+        const marker = L.marker(p.latlng, {
+          icon: L.divIcon({ className: 'pickup-marker', html: pinHtml, iconSize: [22,22], iconAnchor: [11,11] }),
+        }).addTo(state.map).bindPopup(`<strong>${escapeHtml(p.full_name || 'Passenger')}</strong><br>Not Boarded`);
+        state.routeLayers.push(marker);
+      });
+
+      // Add Office destination marker
       const officeMarker = L.marker(officeCoord, {
         icon: L.divIcon({
           className: 'office-marker-icon',
@@ -268,10 +307,7 @@ function updateMap(markers) {
 
       state.routeLayers.push(officeMarker);
 
-      // Draw snapped path
-      if (state.driverLatLng && pathCoords.length >= 2) {
-        drawRoadRoute(pathCoords, routeRequestId);
-      }
+      // Draw only per-leg active route; do not draw the full snapped base route
     }
   }
 
@@ -327,6 +363,51 @@ function updateMap(markers) {
           }
           state.mapCentered = true;
         }
+        // Draw route and passenger markers for employee to visualize progress
+        try {
+          const pickups = (ride.pickup_order || []).filter(p => p.latitude && p.longitude).map(p => ({ user_id: p.user_id, latlng: [p.latitude, p.longitude], full_name: p.full_name }));
+          const officeCoord = [22.32414, 73.16594];
+          const origin = activeDriver ? [activeDriver.latitude, activeDriver.longitude] : (state.driverLatLng || (pickups.length ? pickups[0].latlng : null));
+          const passengerBoarded = (userId) => {
+            const statuses = ride.passengers || [];
+            const found = statuses.find(s => (s.id === userId || s.passenger_user_id === userId || s.user_id === userId));
+            return !!(found && found.trip_status && found.trip_status.boarded);
+          };
+          let activeIndex = pickups.findIndex(p => !passengerBoarded(p.user_id));
+          if (activeIndex === -1) activeIndex = pickups.length;
+          // construct legs
+          const legs = [];
+          if (origin) {
+            let prev = origin;
+            for (let i = 0; i < pickups.length; i++) { legs.push({ from: prev, to: pickups[i].latlng, index: i }); prev = pickups[i].latlng; }
+            legs.push({ from: prev, to: officeCoord, index: pickups.length });
+          }
+          // Draw active leg in yellow and upcoming legs as lighter yellow; skip completed legs
+          legs.forEach((leg) => {
+            if (leg.index < activeIndex) return;
+            if (leg.index === activeIndex) {
+              drawRoadRouteSegment(leg.from, leg.to, { color: '#FFDE00', weight: 6, opacity: 0.95 }, routeRequestId).catch(() => {});
+            } else {
+              drawRoadRouteSegment(leg.from, leg.to, { color: '#FFDE00', weight: 4, opacity: 0.38 }, routeRequestId).catch(() => {});
+            }
+          });
+          // If employee's ride reached completion, draw the full route and keep it yellow
+          if (activeIndex >= pickups.length && ride.status === 'completed') {
+            if (origin && pathCoords && pathCoords.length >= 2) {
+              drawRoadRoute(pathCoords, routeRequestId).catch(() => {});
+            }
+          }
+          // Render markers only for not-boarded passengers
+          pickups.forEach((p, idx) => {
+            const boarded = passengerBoarded(p.user_id);
+            if (boarded) return;
+            const pinHtml = `<div style="background-color:#ffcc00;color:#000;width:18px;height:18px;border-radius:9px;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-size:0.7rem;">●</div>`;
+            const marker = L.marker(p.latlng, { icon: L.divIcon({ className: 'pickup-marker', html: pinHtml, iconSize: [22,22], iconAnchor: [11,11] }) }).addTo(state.map).bindPopup(`<strong>${escapeHtml(p.full_name || 'Passenger')}</strong><br>Not Boarded`);
+            state.routeLayers.push(marker);
+          });
+          const officeMarker = L.marker(officeCoord, { icon: L.divIcon({ className: 'office-marker-icon', html: `<div style="background-color: #ff3366; color: white; width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 1.1rem;">🏢</div>`, iconSize: [28,28], iconAnchor: [14,14] }) }).addTo(state.map).bindPopup(`<strong>Aditi Vadodara Office</strong><br>Destination`);
+          state.routeLayers.push(officeMarker);
+        } catch (e) {}
       }
     }
   }
@@ -388,6 +469,54 @@ async function drawRoadRoute(coordsLatLng, routeRequestId = state.routeRequestId
       state.mapCentered = true;
     }
   }
+}
+
+async function drawRoadRouteSegment(fromLatLng, toLatLng, style = {}, routeRequestId = state.routeRequestId) {
+  // Build OSRM request for a single leg (lon,lat order)
+  const a = `${fromLatLng[1]},${fromLatLng[0]}`;
+  const b = `${toLatLng[1]},${toLatLng[0]}`;
+  const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${a};${b}?overview=full&geometries=geojson`;
+
+  try {
+    const response = await fetch(osrmUrl);
+    const data = await response.json();
+    if (routeRequestId !== state.routeRequestId) return;
+    if (data.code === "Ok" && data.routes && data.routes[0]) {
+      const geojson = data.routes[0].geometry;
+      const routeLayer = L.geoJSON(geojson, {
+        style: {
+          color: style.color || '#FFDE00',
+          weight: style.weight || 6,
+          opacity: style.opacity ?? 0.95,
+          lineJoin: 'round',
+          lineCap: 'round'
+        }
+      }).addTo(state.map);
+      state.routeLayers.push(routeLayer);
+
+      if (!state.mapCentered) {
+        state.map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
+        state.mapCentered = true;
+      }
+      return true;
+    }
+  } catch (err) {
+    console.warn("OSRM segment routing failed, falling back to straight line:", err);
+  }
+
+  if (routeRequestId !== state.routeRequestId) return;
+  const fallback = L.polyline([fromLatLng, toLatLng], {
+    color: style.color || '#FFDE00',
+    weight: style.weight || 5,
+    opacity: style.opacity ?? 0.9,
+    dashArray: style.dashArray || null
+  }).addTo(state.map);
+  state.routeLayers.push(fallback);
+  if (!state.mapCentered) {
+    state.map.fitBounds(fallback.getBounds(), { padding: [50, 50] });
+    state.mapCentered = true;
+  }
+  return false;
 }
 
 function normalizeErrorMessage(message) {
@@ -752,6 +881,288 @@ function renderPagination(containerId, currentPage, totalPages, onPageChange) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getMonthLabel(month) {
+  const [year, monthIndex] = month.split("-").map(Number);
+  return new Date(year, monthIndex - 1, 1).toLocaleString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function shiftMonth(month, offset) {
+  const [year, monthIndex] = month.split("-").map(Number);
+  const date = new Date(year, monthIndex - 1 + offset, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getCalendarBadgeClass(type) {
+  return `calendar-event ${String(type || "").toLowerCase().replace(/\s+/g, "-")}`;
+}
+
+function getCalendarEventPriority(type) {
+  if (type === "Leave") return 1;
+  if (type === "Boarded") return 2;
+  return 3;
+}
+
+function getCalendarEventTypes(events) {
+  return [...new Set((events || []).map(event => event.type))]
+    .sort((a, b) => getCalendarEventPriority(a) - getCalendarEventPriority(b));
+}
+
+function summarizeCalendarEvent(event) {
+  const person = event.employee?.full_name || event.driver?.full_name || "";
+  const time = event.departure_time ? ` at ${event.departure_time}` : "";
+  const group = event.ride_group_name ? ` - ${event.ride_group_name}` : "";
+  return `${event.type}${person ? `: ${person}` : ""}${group}${time}`;
+}
+
+function renderCalendarLegend() {
+  const container = byId("calendarLegend");
+  if (!container) return;
+  const types = ["Ride", "Leave", "Boarded"];
+  container.innerHTML = types.map((type) => `<span class="${getCalendarBadgeClass(type)}">${type}</span>`).join("");
+}
+
+function renderCalendarDetails(dateKey, events) {
+  const container = byId("calendarDetails");
+  if (!container) return;
+  if (!dateKey) {
+    container.innerHTML = '<p class="code-block">Select a date to inspect schedules and leave signals.</p>';
+    return;
+  }
+  const date = new Date(`${dateKey}T00:00:00`);
+  const title = date.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  if (!events.length) {
+    container.innerHTML = `<article><strong>${title}</strong><small>No calendar events for this date.</small></article>`;
+    return;
+  }
+  container.innerHTML = `
+    <article>
+      <strong>${title}</strong>
+      <div class="calendar-detail-list">
+        ${events.map((event) => `
+          <div class="calendar-detail-item">
+            <span class="${getCalendarBadgeClass(event.type)}">${escapeHtml(event.type)}</span>
+            <strong>${escapeHtml(event.title || summarizeCalendarEvent(event))}</strong>
+            <small>
+              ${event.ride_group_name ? `Ride: ${escapeHtml(event.ride_group_name)}<br>` : ""}
+              ${event.driver?.full_name ? `Driver: ${escapeHtml(event.driver.full_name)}<br>` : ""}
+              ${event.employee?.full_name ? `Employee: ${escapeHtml(event.employee.full_name)}<br>` : ""}
+              ${event.passengers?.length ? `Passengers: ${event.passengers.map((p) => `${escapeHtml(p.full_name || "Passenger")}${p.trip_status?.boarded ? " (Boarded)" : ""}`).join(", ")}<br>` : ""}
+              ${event.boarding_status?.boarded ? `Boarded at: ${escapeHtml(event.boarding_status.boarded_at || "Recorded")}<br>` : ""}
+              ${event.reason ? `Reason: ${escapeHtml(event.reason)}<br>` : ""}
+              ${event.reroute_candidate ? "Marked for future rerouting review" : ""}
+            </small>
+            ${event.can_board ? `<button type="button" class="primary-button" data-board-ride="${escapeHtml(event.ride_group_id)}" style="width: fit-content; padding: 7px 12px; font-size: 0.82rem;">I've Boarded the Cab</button>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
+  bindBoardButtons();
+}
+
+function renderCalendar(data) {
+  const grid = byId("calendarGrid");
+  if (!grid || !data) return;
+
+  const month = data.month || state.calendarMonth;
+  const [year, monthIndex] = month.split("-").map(Number);
+  const firstDay = new Date(year, monthIndex - 1, 1);
+  const calendarStart = new Date(firstDay);
+  calendarStart.setDate(firstDay.getDate() - ((firstDay.getDay() + 6) % 7));
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const selected = state.selectedCalendarDate || todayKey;
+
+  const eventsByDate = (data.events || []).reduce((acc, event) => {
+    if (!acc[event.date]) acc[event.date] = [];
+    acc[event.date].push(event);
+    return acc;
+  }, {});
+
+  const label = byId("calendarMonthLabel");
+  if (label) label.textContent = getMonthLabel(month);
+
+  const tabs = byId("calendarMonthTabs");
+  if (tabs) {
+    const months = [-2, -1, 0, 1, 2, 3].map((offset) => shiftMonth(month, offset));
+    tabs.innerHTML = months.map((item) => `
+      <button type="button" class="calendar-month-tab ${item === month ? "active" : ""}" data-calendar-month="${item}">
+        ${new Date(`${item}-01T00:00:00`).toLocaleString("en-US", { month: "short" })}
+      </button>
+    `).join("");
+  }
+
+  const weekDays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+  const cells = [];
+  for (let index = 0; index < 42; index += 1) {
+    const day = new Date(calendarStart);
+    day.setDate(calendarStart.getDate() + index);
+    const key = day.toISOString().slice(0, 10);
+    const dayEvents = eventsByDate[key] || [];
+    const eventTypes = getCalendarEventTypes(dayEvents);
+    const outside = day.getMonth() !== monthIndex - 1;
+    const hasLeave = dayEvents.some((event) => event.type === "Leave");
+    cells.push(`
+      <button type="button" class="calendar-day ${outside ? "outside" : ""} ${key === todayKey ? "today" : ""} ${key === selected ? "selected" : ""} ${hasLeave ? "has-leave" : ""}" data-calendar-date="${key}">
+        <span class="calendar-date-num">${day.getDate()}</span>
+        <span class="calendar-events-stack">
+          ${eventTypes.map((type) => `<span class="${getCalendarBadgeClass(type)}">${escapeHtml(type)}</span>`).join("")}
+          ${dayEvents.length > 1 ? `<span class="calendar-more">${dayEvents.length} item${dayEvents.length === 1 ? "" : "s"}</span>` : ""}
+        </span>
+      </button>
+    `);
+  }
+
+  grid.innerHTML = `
+    ${weekDays.map((day) => `<div class="calendar-weekday">${day}</div>`).join("")}
+    ${cells.join("")}
+  `;
+
+  const reroute = byId("calendarRerouteSummary");
+  if (reroute) {
+    const leaveDates = data.rerouting?.leave_dates || [];
+    reroute.innerHTML = data.rerouting?.ready
+      ? `<strong>${leaveDates.length}</strong><span>leave date${leaveDates.length === 1 ? "" : "s"} flagged for future rerouting</span>`
+      : "";
+  }
+
+  renderCalendarLegend();
+  renderCalendarDetails(selected, eventsByDate[selected] || []);
+  bindBoardButtons();
+}
+
+async function loadCalendarModule(month = state.calendarMonth) {
+  if (!byId("calendarGrid")) return null;
+  state.calendarMonth = month;
+  const data = await api(`/api/v1/calendar?month=${encodeURIComponent(month)}`).catch(() => ({
+    month,
+    events: [],
+    rerouting: { ready: false, leave_dates: [] },
+  }));
+  state.calendarData = data;
+  state.calendarEvents = data.events || [];
+  renderCalendar(data);
+  return data;
+}
+
+function setupCalendarInteractions() {
+  const shell = byId("calendarModule");
+  if (!shell || shell.dataset.bound) return;
+  shell.dataset.bound = "true";
+  shell.addEventListener("click", async (event) => {
+    const monthButton = event.target.closest("[data-calendar-month]");
+    if (monthButton) {
+      state.selectedCalendarDate = null;
+      await loadCalendarModule(monthButton.dataset.calendarMonth);
+      return;
+    }
+
+    const dateButton = event.target.closest("[data-calendar-date]");
+    if (dateButton && state.calendarData) {
+      state.selectedCalendarDate = dateButton.dataset.calendarDate;
+      renderCalendar(state.calendarData);
+      return;
+    }
+
+    const boardButton = event.target.closest("[data-board-ride]");
+    if (boardButton) {
+      boardButton.disabled = true;
+      boardButton.textContent = "Boarding...";
+      try {
+        await api(`/api/v1/calendar/rides/${boardButton.dataset.boardRide}/board`, { method: "POST" });
+        await loadCalendarModule();
+      } catch (error) {
+        boardButton.disabled = false;
+        boardButton.textContent = "I've Boarded the Cab";
+        alert(`Failed to mark boarded: ${normalizeErrorMessage(parseApiError(error))}`);
+      }
+    }
+  });
+}
+
+// Bind click handlers to any boarding buttons rendered into the page
+function bindBoardButtons() {
+  document.querySelectorAll("[data-board-ride]").forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "true";
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const rideId = btn.dataset.boardRide;
+      if (!rideId) return;
+      btn.disabled = true;
+      const prevText = btn.textContent;
+      btn.textContent = "Boarding...";
+      try {
+        await api(`/api/v1/calendar/rides/${rideId}/board`, { method: "POST" });
+        // show confirmation
+        btn.textContent = "Boarded";
+        // update nearby passenger status text if present
+        const parent = btn.closest("li") || btn.closest(".calendar-detail-item");
+        if (parent) {
+          const small = parent.querySelector("small");
+          if (small) small.textContent = "Boarded";
+        }
+        // refresh supervisor/driver views and markers quickly
+        try {
+          await refreshSupervisorRideProgress();
+          const active = await api("/api/v1/tracking/active").catch(() => []);
+          updateMap(active || []);
+        } catch (_) {}
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = prevText || "I've Boarded the Cab";
+        alert(`Failed to mark boarded: ${normalizeErrorMessage(parseApiError(err))}`);
+      }
+    });
+  });
+}
+
+function setupRoleTabs(defaultTitle) {
+  const navRide = byId("navCurrentRide");
+  const navCalendar = byId("navCalendar");
+  const rideSection = byId("rideDashboardSection");
+  const calendarSection = byId("calendarSection");
+  const title = byId("rolePageTitle");
+  if (!navRide || !navCalendar || !rideSection || !calendarSection) return;
+  if (navRide.dataset.bound) return;
+  navRide.dataset.bound = "true";
+
+  navRide.addEventListener("click", (event) => {
+    event.preventDefault();
+    document.querySelectorAll(".nav-list .nav-item").forEach((item) => item.classList.remove("active"));
+    navRide.classList.add("active");
+    rideSection.style.display = "block";
+    calendarSection.style.display = "none";
+    ["sectionCurrentRide", "sectionRideHistory", "sectionCabUnavailability", "sectionDailyPickup"].forEach((sectionId) => {
+      const section = byId(sectionId);
+      if (section) section.style.display = sectionId === "sectionCurrentRide" ? "block" : "none";
+    });
+    if (title) title.textContent = defaultTitle;
+  });
+
+  navCalendar.addEventListener("click", async (event) => {
+    event.preventDefault();
+    document.querySelectorAll(".nav-list .nav-item").forEach((item) => item.classList.remove("active"));
+    navCalendar.classList.add("active");
+    rideSection.style.display = "none";
+    calendarSection.style.display = "block";
+    if (title) title.textContent = "Calendar schedule and availability";
+    setupCalendarInteractions();
+    await loadCalendarModule();
+  });
+}
+
 function renderPeopleTable(containerId, people) {
   const container = byId(containerId);
   if (!container) return;
@@ -938,19 +1349,19 @@ function renderActiveDriverPopup(marker) {
   const ride = state.rideProgressByDriver[marker.driver_id];
   if (!ride) return baseHtml;
 
-  const passengers = ride.pickup_order || [];
+  const passengers = ride.passengers || [];
   const counts = passengers.reduce((acc, passenger) => {
-    const status = getPassengerTripStatus(passenger).status || "pending";
-    if (status === "picked_up") acc.pickedUp += 1;
-    else if (status === "dropped") acc.dropped += 1;
-    else acc.pending += 1;
+    const boarded = !!(passenger.trip_status && passenger.trip_status.boarded);
+    if (boarded) acc.boarded += 1;
+    else acc.notBoarded += 1;
     return acc;
-  }, { pickedUp: 0, dropped: 0, pending: 0 });
+  }, { boarded: 0, notBoarded: 0 });
 
   const passengerList = passengers.length
     ? passengers.map((passenger) => {
-      const status = getPassengerTripStatus(passenger).status || "pending";
-      return `<div>${getPassengerProgressIcon(status)} ${passenger.full_name || "Passenger"} (${getPassengerProgressLabel(status)})</div>`;
+      const boarded = !!(passenger.trip_status && passenger.trip_status.boarded);
+      const boardedAt = passenger.trip_status && passenger.trip_status.boarded_at ? new Date(passenger.trip_status.boarded_at).toLocaleTimeString() : null;
+      return `<div>${boarded ? '🟢' : '⚪'} ${escapeHtml(passenger.full_name || "Passenger")} ${boarded ? `(Boarded${boardedAt ? ` at ${boardedAt}` : ''})` : '(Not Boarded)'}</div>`;
     }).join("")
     : "<div>No passengers assigned</div>";
 
@@ -959,9 +1370,8 @@ function renderActiveDriverPopup(marker) {
     <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #ddd;">
       <strong>Ride Details:</strong><br>
       Total Passengers: ${passengers.length}<br>
-      Picked Up Count: ${counts.pickedUp}<br>
-      Dropped Count: ${counts.dropped}<br>
-      Pending Count: ${counts.pending}
+      Boarded: ${counts.boarded}<br>
+      Not Boarded: ${counts.notBoarded}
     </div>
     <div style="margin-top: 8px;">
       <strong>Passenger List:</strong>
@@ -971,29 +1381,8 @@ function renderActiveDriverPopup(marker) {
 }
 
 function renderPassengerStatusAction(ride, passenger) {
-  if (!state.currentUser || state.currentUser.role !== "driver") return "";
-
-  const tripStatus = getPassengerTripStatus(passenger);
-  const status = tripStatus.status || "pending";
-  const baseStyle = "padding: 5px 10px; font-size: 0.8rem; min-width: 86px;";
-
-  if (status === "dropped") {
-    return `<button type="button" class="ghost-button" disabled style="${baseStyle} opacity: 0.6; cursor: not-allowed;">Completed</button>`;
-  }
-
-  const nextStatus = status === "picked_up" ? "dropped" : "picked_up";
-  const label = status === "picked_up" ? "Drop" : "Pick Up";
-  const buttonClass = status === "picked_up" ? "ghost-button" : "primary-button";
-  return `
-    <button
-      type="button"
-      class="${buttonClass}"
-      data-passenger-status="${nextStatus}"
-      data-ride-id="${ride.id}"
-      data-passenger-id="${passenger.user_id}"
-      style="${baseStyle}"
-    >${label}</button>
-  `;
+  // Pickup/Drop workflow removed: drivers have no per-passenger action buttons.
+  return "";
 }
 
 function renderCurrentRide(containerId, ride, label) {
@@ -1004,27 +1393,45 @@ function renderCurrentRide(containerId, ride, label) {
     return;
   }
 
+  // Render a compact passenger list showing boarded state. Pickup/drop sequence removed.
   let sequenceHtml = "";
-  const hasPickup = ride.pickup_order && ride.pickup_order.length > 0;
-  const hasDrop = ride.drop_order && ride.drop_order.length > 0;
+  // Normalize passenger entries: rides API may provide `passenger_user_id` and no names,
+  // while pickup_order contains resolved `full_name`. Merge them so we always have id + full_name + trip_status.
+  const pickupNameMap = (ride.pickup_order || []).reduce((acc, p) => {
+    if (p.user_id) acc[p.user_id] = p.full_name || acc[p.user_id] || "Passenger";
+    return acc;
+  }, {});
+  const passengers = (ride.passengers || []).map(p => {
+    const id = p.id || p.user_id || p.passenger_user_id;
+    const full_name = p.full_name || pickupNameMap[id] || "Passenger";
+    return { id, full_name, trip_status: p.trip_status || {} };
+  });
+  if (!passengers.length) {
+    // Fallback to pickup_order when passengers array is empty
+    (ride.pickup_order || []).forEach(p => passengers.push({ id: p.user_id, full_name: p.full_name || "Passenger", trip_status: p.trip_status || {} }));
+  }
 
-  if (hasPickup) {
-    const listItems = ride.pickup_order.map(p => {
-      const isMe = state.currentUser && state.currentUser.id === p.user_id;
-      const display = `${p.full_name} (${p.pickup_label || "No Location set"})`;
-      const tripStatus = getPassengerTripStatus(p);
+  if (passengers.length) {
+      const listItems = passengers.map((p) => {
+      const isMe = state.currentUser && state.currentUser.id === p.id;
+      const boarded = p.trip_status?.boarded;
+      const boardedAt = p.trip_status?.boarded_at;
+      const timeText = boardedAt ? ` at ${new Date(boardedAt).toLocaleTimeString()}` : "";
+      const statusText = boarded ? `Boarded${timeText}` : "Not Boarded";
+      const boardButton = (isMe && !boarded && (ride.status === "started" || ride.status === "ongoing"))
+        ? `<button type="button" class="primary-button" data-board-ride="${ride.id}" data-board-passenger="${escapeHtml(p.id)}" style="width: fit-content; padding: 7px 12px; font-size: 0.82rem;">I've Boarded the Cab</button>`
+        : "";
       return `
-        <li style="margin-bottom: 8px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
-            <span>${isMe ? `<strong>${display} (You)</strong>` : display}<br><small>Status: ${formatPassengerStatus(tripStatus.status)}</small></span>
-            ${renderPassengerStatusAction(ride, p)}
-          </div>
+        <li style="margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
+          <span>${isMe ? `<strong>${escapeHtml(p.full_name)} (You)</strong>` : escapeHtml(p.full_name)}<br><small style="color:var(--muted);">${statusText}</small></span>
+          ${boardButton}
         </li>
       `;
     }).join("");
+
     sequenceHtml += `
       <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
-        <strong style="font-size: 0.85rem; color: var(--muted);">Pickup Sequence:</strong>
+        <strong style="font-size: 0.85rem; color: var(--muted);">Passengers</strong>
         <ol style="margin: 4px 0 0 16px; font-size: 0.85rem; line-height: 1.4;">
           ${listItems}
         </ol>
@@ -1033,15 +1440,7 @@ function renderCurrentRide(containerId, ride, label) {
   } else {
     sequenceHtml += `
       <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
-        <p style="font-size: 0.85rem; color: var(--muted); margin: 0;">No pickup stops are required for this trip.</p>
-      </div>
-    `;
-  }
-
-  if (!hasDrop) {
-    sequenceHtml += `
-      <div style="margin-top: 8px;">
-        <p style="font-size: 0.85rem; color: var(--muted); margin: 0;">No drop stops are required for this trip.</p>
+        <p style="font-size: 0.85rem; color: var(--muted); margin: 0;">No passengers assigned.</p>
       </div>
     `;
   }
@@ -1081,11 +1480,15 @@ function renderCurrentRide(containerId, ride, label) {
       ${driverControlsHtml}
     </article>
   `;
+  bindBoardButtons();
 }
 
 function filterEmployeeRides(rides) {
   if (!state.currentUser) return [];
-  return rides.filter((ride) => (ride.passengers || []).some((passenger) => passenger.passenger_user_id === state.currentUser.id));
+  return rides.filter((ride) => (ride.passengers || []).some((passenger) => {
+    const id = passenger.id || passenger.user_id || passenger.passenger_user_id;
+    return id === state.currentUser.id;
+  }));
 }
 
 function filterDriverRides(rides) {
@@ -1610,23 +2013,24 @@ function renderRidesCardsList(containerId, rides) {
   }
 
   const cardsHtml = rides.map(ride => {
+    // Show compact passenger list with boarding state. Pickup/Drop sequence removed.
     let sequenceHtml = "";
-    const hasPickup = ride.pickup_order && ride.pickup_order.length > 0;
-    if (hasPickup) {
-      const listItems = ride.pickup_order.map(p => {
-        const isMe = state.currentUser && state.currentUser.id === p.user_id;
-        const display = `${p.full_name} (${p.pickup_label || "No Location set"})`;
-        const tripStatus = getPassengerTripStatus(p);
-        return `
-          <li style="margin-bottom: 4px;">
-            ${isMe ? `<strong>${display} (You)</strong>` : display}<br>
-            <small style="color: var(--muted);">Status: ${formatPassengerStatus(tripStatus.status)}</small>
-          </li>
-        `;
-      }).join("");
+    // Normalize passenger entries similar to renderCurrentRide: prefer resolved passenger ids and names
+    const pickupNameMap = (ride.pickup_order || []).reduce((acc, p) => { if (p.user_id) acc[p.user_id] = p.full_name || acc[p.user_id] || "Passenger"; return acc; }, {});
+    const passengers = (ride.passengers || []).map(p => ({ id: p.id || p.user_id || p.passenger_user_id, full_name: p.full_name || pickupNameMap[p.user_id || p.passenger_user_id] || "Passenger", trip_status: p.trip_status || {} }));
+    if (!passengers.length) {
+      (ride.pickup_order || []).forEach(p => passengers.push({ id: p.user_id, full_name: p.full_name || "Passenger", trip_status: p.trip_status || {} }));
+    }
+    if (passengers.length) {
+      const listItems = passengers.map(p => `
+        <li style="margin-bottom: 4px;">
+          ${state.currentUser && state.currentUser.id === (p.id || p.user_id) ? `<strong>${escapeHtml(p.full_name)} (You)</strong>` : escapeHtml(p.full_name)}<br>
+          <small style="color: var(--muted);">${p.trip_status?.boarded ? `Boarded${p.trip_status.boarded_at ? ` at ${new Date(p.trip_status.boarded_at).toLocaleTimeString()}` : ''}` : 'Not Boarded'}</small>
+        </li>
+      `).join("");
       sequenceHtml += `
         <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
-          <strong style="font-size: 0.85rem; color: var(--muted);">Pickup Sequence:</strong>
+          <strong style="font-size: 0.85rem; color: var(--muted);">Passengers</strong>
           <ol style="margin: 4px 0 0 16px; font-size: 0.85rem; line-height: 1.4; color: var(--text);">
             ${listItems}
           </ol>
@@ -1634,8 +2038,15 @@ function renderRidesCardsList(containerId, rides) {
       `;
     }
 
-    const tripStatusForMe = (ride.pickup_order || []).find(p => state.currentUser && p.user_id === state.currentUser.id);
-    const boardingStatusLabel = tripStatusForMe ? formatPassengerStatus(getPassengerTripStatus(tripStatusForMe).status) : "Pending";
+    let boardingStatusLabel = "Pending";
+    if (state.currentUser && Array.isArray(ride.passengers)) {
+      const me = ride.passengers.find(p => (p.id === state.currentUser.id || p.passenger_user_id === state.currentUser.id));
+      if (me) {
+        const boarded = !!(me.trip_status && me.trip_status.boarded);
+        const boardedAt = me.trip_status && me.trip_status.boarded_at;
+        boardingStatusLabel = boarded ? `Boarded${boardedAt ? ` at ${new Date(boardedAt).toLocaleTimeString()}` : ''}` : 'Not Boarded';
+      }
+    }
 
     return `
       <div class="card" style="border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: rgba(255,255,255,0.02); display: flex; flex-direction: column; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
@@ -1665,6 +2076,7 @@ function renderRidesCardsList(containerId, rides) {
       ${cardsHtml}
     </div>
   `;
+  bindBoardButtons();
 }
 
 function setupEmployeeTabs() {
@@ -1689,6 +2101,11 @@ function setupEmployeeTabs() {
           const sec = byId(t.sectionId);
           if (sec) sec.style.display = "none";
         });
+        byId("navCalendar")?.classList.remove("active");
+        const rideDashboard = byId("rideDashboardSection");
+        const calendarSection = byId("calendarSection");
+        if (rideDashboard) rideDashboard.style.display = "block";
+        if (calendarSection) calendarSection.style.display = "none";
 
         // Add active class and show section
         navEl.classList.add("active");
@@ -1712,6 +2129,11 @@ async function loadRoleRidePage(filterFn) {
   initPickupPointSettings();
   initAvailabilityForm();
   
+  setupRoleTabs(
+    state.currentUser?.role === "driver"
+      ? "Today's routes, status, and tracking"
+      : "Your cab schedule, live updates, and trip history"
+  );
   const [rides, notifications, active] = await Promise.all([
     api("/api/v1/rides?limit=100").catch(() => []),
     api("/api/v1/notifications").catch(() => []),
@@ -1753,12 +2175,21 @@ async function loadRoleRidePage(filterFn) {
       const completeId = e.target.dataset.completeRide;
       const delayId = e.target.dataset.delayRide;
       const delayVal = e.target.dataset.delayVal;
-      const passengerStatus = e.target.dataset.passengerStatus;
-      const passengerRideId = e.target.dataset.rideId;
-      const passengerId = e.target.dataset.passengerId;
-      
-      if (passengerStatus && passengerRideId && passengerId) {
-        await updatePassengerTripStatus(passengerRideId, passengerId, passengerStatus, filterFn);
+      const boardRideId = e.target.dataset.boardRide;
+
+      if (boardRideId) {
+        const boardBtn = e.target;
+        boardBtn.disabled = true;
+        const prevText = boardBtn.textContent;
+        boardBtn.textContent = "Boarding...";
+        try {
+          await api(`/api/v1/calendar/rides/${boardRideId}/board`, { method: "POST" });
+          await loadRoleRidePage(filterFn);
+        } catch (err) {
+          boardBtn.disabled = false;
+          boardBtn.textContent = prevText || "I've Boarded the Cab";
+          alert(`Failed to mark boarded: ${normalizeErrorMessage(parseApiError(err))}`);
+        }
       } else if (startId) {
         await api(`/api/v1/ride-groups/${startId}`, {
           method: "PUT",
@@ -1784,6 +2215,8 @@ async function loadRoleRidePage(filterFn) {
   ensureNotificationDrawer();
   updateNotificationState(notifications || []);
   updateMap(active || []);
+  setupCalendarInteractions();
+  await loadCalendarModule();
   startNotificationPolling();
   startTrackingPolling();
 
@@ -2216,6 +2649,8 @@ async function loadSupervisorPage(groupPage = 1) {
     (p) => loadSupervisorPage(p));
   setupSupervisorForms();
   setupSupervisorTabs();
+  setupCalendarInteractions();
+  await loadCalendarModule();
 
   ensureNotificationDrawer();
   updateNotificationState(notifications || []);
@@ -2228,19 +2663,6 @@ async function loadSupervisorPage(groupPage = 1) {
     bell.addEventListener("click", () => openNotificationDrawer());
   }
 
-  // Setup unavailability toggle in main dashboard
-  const navUnavailability = byId("navUnavailability");
-  const unavailabilityCard = byId("unavailabilityCard");
-  
-  if (navUnavailability && unavailabilityCard && !navUnavailability.dataset.bound) {
-    navUnavailability.dataset.bound = "true";
-    navUnavailability.addEventListener("click", () => {
-      const isVisible = unavailabilityCard.style.display !== "none";
-      unavailabilityCard.style.display = isVisible ? "none" : "block";
-      navUnavailability.classList.toggle("active");
-    });
-  }
-
   updateMap(active || []);
   startSupervisorRideProgressPolling();
   startTrackingWebSocket();
@@ -2249,8 +2671,11 @@ async function loadSupervisorPage(groupPage = 1) {
 function setupSupervisorTabs() {
   const navRideGroups = byId("navRideGroups");
   const navEmployeeMap = byId("navEmployeeMap");
+  const navUnavailability = byId("navUnavailability");
+  const navCalendar = byId("navCalendar");
   const rideGroupsSection = byId("rideGroupsSection");
   const employeeMapSection = byId("employeeMapSection");
+  const calendarSection = byId("calendarSection");
   const supervisorTitle = byId("supervisorTitle");
 
   if (!navRideGroups || !navEmployeeMap || !rideGroupsSection || !employeeMapSection) return;
@@ -2262,10 +2687,21 @@ function setupSupervisorTabs() {
     e.preventDefault();
     navRideGroups.classList.add("active");
     navEmployeeMap.classList.remove("active");
+    navCalendar?.classList.remove("active");
+    navUnavailability?.classList.remove("active");
     rideGroupsSection.style.display = "block";
     employeeMapSection.style.display = "none";
+    if (calendarSection) calendarSection.style.display = "none";
+
+    const sections = rideGroupsSection.querySelectorAll(".dashboard-grid > section");
+    sections.forEach((section) => {
+      section.style.display = "block";
+    });
+    const metricsRow = rideGroupsSection.querySelector(".metrics-row");
+    if (metricsRow) metricsRow.style.display = "grid";
+
     if (supervisorTitle) {
-      supervisorTitle.textContent = "Create ride groups, assign drivers, and manage pickup order";
+      supervisorTitle.textContent = "Create ride groups, assign drivers, and manage assignments";
     }
   });
 
@@ -2273,16 +2709,61 @@ function setupSupervisorTabs() {
     e.preventDefault();
     navEmployeeMap.classList.add("active");
     navRideGroups.classList.remove("active");
+    navCalendar?.classList.remove("active");
+    navUnavailability?.classList.remove("active");
     rideGroupsSection.style.display = "none";
     employeeMapSection.style.display = "block";
+    if (calendarSection) calendarSection.style.display = "none";
     if (supervisorTitle) {
-      supervisorTitle.textContent = "Bird's eye view of all employee pickup locations";
+      supervisorTitle.textContent = "Bird's eye view of all employee locations";
     }
     
     // Initialize & populate employee pickup map
     setTimeout(() => {
       initAllEmployeesMap();
     }, 100);
+  });
+
+  navUnavailability.addEventListener("click", (e) => {
+    e.preventDefault();
+    navUnavailability.classList.add("active");
+    navRideGroups.classList.remove("active");
+    navEmployeeMap.classList.remove("active");
+    navCalendar?.classList.remove("active");
+    if (rideGroupsSection) rideGroupsSection.style.display = "block";
+    if (employeeMapSection) employeeMapSection.style.display = "none";
+    if (calendarSection) calendarSection.style.display = "none";
+
+    const sections = rideGroupsSection.querySelectorAll(".dashboard-grid > section");
+    sections.forEach((section) => {
+      if (section.id === "unavailabilityCard") {
+        section.style.display = "block";
+      } else {
+        section.style.display = "none";
+      }
+    });
+
+    const metricsRow = rideGroupsSection.querySelector(".metrics-row");
+    if (metricsRow) metricsRow.style.display = "none";
+    if (supervisorTitle) {
+      supervisorTitle.textContent = "Leave and unavailability management";
+    }
+  });
+
+  navCalendar?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    navCalendar.classList.add("active");
+    navRideGroups.classList.remove("active");
+    navEmployeeMap.classList.remove("active");
+    navUnavailability.classList.remove("active");
+    rideGroupsSection.style.display = "none";
+    employeeMapSection.style.display = "none";
+    if (calendarSection) calendarSection.style.display = "block";
+    if (supervisorTitle) {
+      supervisorTitle.textContent = "Calendar schedules, leave dates, and rerouting signals";
+    }
+    setupCalendarInteractions();
+    await loadCalendarModule();
   });
 }
 
@@ -2340,10 +2821,24 @@ function initAllEmployeesMap() {
 
       const initials = getInitials(e.full_name);
 
+      // Determine boarded state by consulting ride progress cache when available
+      let boarded = false;
+      try {
+        Object.values(state.rideProgressByDriver || {}).forEach((r) => {
+          (r.passengers || []).forEach((p) => {
+            if (p.full_name === e.full_name && p.trip_status && p.trip_status.boarded) boarded = true;
+          });
+        });
+      } catch (err) {
+        boarded = false;
+      }
+
+      const bgColor = boarded ? '#4cff7c' : 'var(--accent)';
+
       const marker = L.marker(coord, {
         icon: L.divIcon({
           className: 'passenger-marker-icon',
-          html: `<div class="passenger-initials-badge" style="background-color: var(--accent); color: #000; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; border: 2px solid #000; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-size: 0.85rem; font-family: 'Inter', sans-serif;">${initials}</div>`,
+          html: `<div class="passenger-initials-badge" style="background-color: ${bgColor}; color: #000; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; border: 2px solid #000; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-size: 0.85rem; font-family: 'Inter', sans-serif;">${initials}</div>`,
           iconSize: [30, 30],
           iconAnchor: [15, 15]
         })
