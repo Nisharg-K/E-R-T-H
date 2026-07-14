@@ -300,6 +300,34 @@ def update_passenger_status(
         **next_status
     }
 
+@router.post("/{group_id}/relist")
+def relist_ride_group(group_id: str, current_user: dict = Depends(get_current_user_from_token)):
+    if current_user["role"] not in ("supervisor", "admin"):
+        raise HTTPException(status_code=403, detail="Only supervisor or admin can relist ride groups")
+        
+    existing = ride_groups_col.find_one({"id": group_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Ride group not found")
+        
+    passenger_ids = existing.get("passenger_ids", [])
+    reset_statuses = {}
+    for pid in passenger_ids:
+        reset_statuses[pid] = default_passenger_status()
+        
+    ride_groups_col.update_one(
+        {"id": group_id},
+        {
+            "$set": {
+                "status": "draft",
+                "passenger_statuses": reset_statuses,
+                "delay_minutes": 0
+            }
+        }
+    )
+    
+    updated = ride_groups_col.find_one({"id": group_id})
+    return resolve_group_details(updated)
+
 @router.delete("/{group_id}")
 def delete_ride_group(group_id: str, current_user: dict = Depends(get_current_user_from_token)):
     if current_user["role"] not in ("supervisor", "admin"):

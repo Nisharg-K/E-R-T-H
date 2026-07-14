@@ -2439,6 +2439,8 @@ function renderGroupsTable(groups) {
       : "";
     const postBtn = status === "draft" ? 
       `<button class="primary-button" data-post-group="${group.id}" style="padding: 6px 12px; font-size: 0.85rem; margin-right: 6px; background: #007bff; border-color: #007bff;">Post Ride</button>` : "";
+    const relistBtn = status === "completed" ? 
+      `<button class="primary-button" data-relist-group="${group.id}" style="padding: 6px 12px; font-size: 0.85rem; margin-right: 6px; background: #28a745; border-color: #28a745;">Relist</button>` : "";
     return `
       <tr>
         <td><strong>${group.name}</strong>${recurringBadge}</td>
@@ -2447,6 +2449,7 @@ function renderGroupsTable(groups) {
         <td><span class="tag ${status === "ongoing" || status === "started" ? "success" : ""}">${status}</span></td>
         <td>
           ${postBtn}
+          ${relistBtn}
           <button class="ghost-button" data-edit-group="${group.id}" style="padding: 6px 12px; font-size: 0.85rem; margin-right: 6px;">Edit</button>
           <button class="danger-button" data-delete-group="${group.id}" style="padding: 6px 12px; font-size: 0.85rem;">Delete</button>
         </td>
@@ -2619,6 +2622,7 @@ function setupSupervisorForms() {
     const editId = e.target.dataset.editGroup;
     const deleteId = e.target.dataset.deleteGroup;
     const postId = e.target.dataset.postGroup;
+    const relistId = e.target.dataset.relistGroup;
     
     if (editId) {
       startEditGroup(editId);
@@ -2631,6 +2635,15 @@ function setupSupervisorForms() {
         await loadSupervisorPage();
       } catch (err) {
         alert(`Failed to post ride: ${normalizeErrorMessage(parseApiError(err))}`);
+      }
+    } else if (relistId) {
+      try {
+        await api(`/api/v1/ride-groups/${relistId}/relist`, {
+          method: "POST"
+        });
+        await loadSupervisorPage();
+      } catch (err) {
+        alert(`Failed to relist ride: ${normalizeErrorMessage(parseApiError(err))}`);
       }
     } else if (deleteId) {
       if (confirm("Are you sure you want to delete this ride group?")) {
