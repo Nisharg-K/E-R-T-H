@@ -4,6 +4,7 @@ import datetime
 from app.core.auth import get_current_user_from_token
 from app.core.database import availability_col, db, ride_groups_col, users_col
 from app.routers.ride_groups import build_passenger_statuses, default_passenger_status
+from app.core.clock import get_today_ist
 
 router = APIRouter(prefix="/api/v1/rides", tags=["Rides"])
 
@@ -31,7 +32,7 @@ def get_rides(
     # Map groups to rides format
     resolved_rides = []
     for g in groups:
-        trip_date = g.get("ride_date") or date or datetime.date.today().isoformat()
+        trip_date = g.get("ride_date") or date or get_today_ist().isoformat()
         passenger_ids = g.get("passenger_ids", [])
         availability_docs = list(availability_col.find({
             "employee_id": {"$in": passenger_ids},

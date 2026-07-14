@@ -4,6 +4,7 @@ const AUTH_ROLE_ROUTES = {
   driver: "./pages/driver.html",
   escort: "./pages/escort.html",
   supervisor: "./pages/supervisor.html",
+  developer: "./pages/developer.html",
 };
 
 const PAGE_ROLE_ROUTES = {
@@ -12,6 +13,7 @@ const PAGE_ROLE_ROUTES = {
   driver: "./driver.html",
   escort: "./escort.html",
   supervisor: "./supervisor.html",
+  developer: "./developer.html",
 };
 
 const state = {
@@ -35,6 +37,7 @@ const state = {
   allEmployeeMarkers: [],
   pickupMap: null,
   pickupMarker: null,
+  developerClockInterval: null,
   geolocationWatchId: null,
   routeRequestId: 0,
   activeTrackingMarkers: [],
@@ -103,19 +106,68 @@ function updateSessionBadge() {
   }
 }
 
-function initDashboardDate() {
+let headerClockInterval = null;
+
+async function initDashboardDate() {
   const dateDisplay = byId("dashboardDate");
   const routeDateDisplay = byId("routeDateDisplay");
-  
-  const today = new Date();
-  const dateStr = today.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
-  
-  if (dateDisplay) {
-    dateDisplay.textContent = dateStr;
-  }
-  
-  if (routeDateDisplay) {
-    routeDateDisplay.textContent = dateStr;
+  if (!dateDisplay && !routeDateDisplay) return;
+
+  // Fallback to local time initially
+  const localToday = new Date();
+  const dateStr = localToday.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  if (dateDisplay) dateDisplay.textContent = dateStr;
+  if (routeDateDisplay) routeDateDisplay.textContent = dateStr;
+
+  if (!state.token) return;
+
+  try {
+    let clockData = await api("/api/v1/clock");
+    
+    if (headerClockInterval) clearInterval(headerClockInterval);
+
+    let tickCount = 0;
+
+    async function updateHeaderDisplay() {
+      tickCount++;
+      // Poll virtual clock settings from backend every 2 seconds to keep tabs synchronized in real-time
+      if (tickCount % 2 === 0) {
+        try {
+          clockData = await api("/api/v1/clock");
+        } catch (e) {
+          console.warn("Failed to poll virtual clock settings", e);
+        }
+      }
+
+      if (!clockData.use_custom_time) {
+        const activeDate = new Date();
+        const dStr = activeDate.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+        if (dateDisplay) dateDisplay.textContent = dStr;
+        if (routeDateDisplay) routeDateDisplay.textContent = dStr;
+      } else {
+        const realNow = new Date();
+        const baseReal = new Date(clockData.set_at_real_time);
+        const baseMock = new Date(clockData.custom_time);
+        const elapsedReal = (realNow - baseReal) / 1000.0;
+        const elapsedMock = elapsedReal * clockData.multiplier;
+        
+        // Add 5.30 hours offset to display local IST virtual time on dashboards (since backend base is UTC)
+        const mockNowUtc = new Date(baseMock.getTime() + elapsedMock * 1000.0);
+        const mockNowIst = new Date(mockNowUtc.getTime() + (5.5 * 60 * 60 * 1000));
+        
+        const dStr = mockNowIst.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+        const tStr = mockNowIst.toISOString().substring(11, 19);
+        const htmlContent = `🕰️ <span style="color: var(--accent); font-weight: bold;">${dStr} ${tStr}</span> <span style="font-size: 0.75rem; opacity: 0.8;">(${clockData.multiplier.toFixed(1)}x)</span>`;
+        
+        if (dateDisplay) dateDisplay.innerHTML = htmlContent;
+        if (routeDateDisplay) routeDateDisplay.innerHTML = htmlContent;
+      }
+    }
+
+    updateHeaderDisplay();
+    headerClockInterval = setInterval(updateHeaderDisplay, 1000);
+  } catch (err) {
+    console.warn("Failed to sync header virtual clock", err);
   }
 }
 
@@ -2508,6 +2560,330 @@ window.addEventListener("DOMContentLoaded", () => {
 
   if (currentPage === "escort") {
     initProtectedPage(() => loadRoleRidePage(filterEscortRides), "escort");
+    return;
+  }
+
+  if (currentPage === "developer") {
+    initProtectedPage(loadDeveloperPage, "developer");
   }
 });
+
+async function loadDeveloperPage() {
+  await loadCurrentUser();
+  initLogout();
+  updateSessionBadge();
+  
+  const form = byId("clockConfigForm");
+  const useCustomCheckbox = byId("useCustomTime");
+  const customTimeInput = byId("customTimeInput");
+  const multiplierInput = byId("multiplierInput");
+  const presetSelect = byId("presetMultiplier");
+  const resultDiv = byId("clockFormResult");
+  
+  const metricMode = byId("metricClockMode");
+  const metricSpeed = byId("metricClockSpeed");
+  const metricDisplay = byId("metricClockDisplay");
+  
+  const triggerBtn = byId("triggerSchedulerBtn");
+  const triggerResult = byId("triggerResult");
+  
+  if (!form) return;
+
+  // Local state for ticking clock
+  let clockConfig = {
+    useCustomTime: false,
+    customTime: "",
+    setAtRealTime: "",
+    multiplier: 1.0
+  };
+
+  async function fetchClockSettings() {
+    try {
+      const data = await api("/api/v1/developer/clock");
+      clockConfig.useCustomTime = data.use_custom_time;
+      clockConfig.customTime = data.custom_time;
+      clockConfig.setAtRealTime = data.set_at_real_time;
+      clockConfig.multiplier = data.multiplier;
+      
+      // Update form fields
+      useCustomCheckbox.checked = data.use_custom_time;
+      
+      // Format ISO string to datetime-local format: YYYY-MM-DDTHH:MM:SS
+      if (data.custom_time) {
+        customTimeInput.value = data.custom_time.substring(0, 19);
+      }
+      
+      multiplierInput.value = data.multiplier;
+      presetSelect.value = ["1.0", "10.0", "60.0", "3600.0", "0.0"].includes(String(data.multiplier)) 
+        ? String(data.multiplier) 
+        : "";
+      
+      // Update static metrics
+      metricMode.textContent = data.use_custom_time ? "Custom Clock" : "Real Time";
+      metricSpeed.textContent = data.multiplier.toFixed(1) + "x";
+    } catch (err) {
+      console.error("Failed to load clock settings", err);
+    }
+  }
+
+  await fetchClockSettings();
+
+  // Preset multiplier handler
+  presetSelect.addEventListener("change", () => {
+    if (presetSelect.value !== "") {
+      multiplierInput.value = presetSelect.value;
+    }
+  });
+
+  // Clock Config Form Submit
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    resultDiv.textContent = "";
+    try {
+      await api("/api/v1/developer/clock", {
+        method: "PUT",
+        body: JSON.stringify({
+          use_custom_time: useCustomCheckbox.checked,
+          custom_time: customTimeInput.value,
+          multiplier: parseFloat(multiplierInput.value)
+        })
+      });
+      resultDiv.style.color = "#4cff7c";
+      resultDiv.textContent = "Settings applied successfully.";
+      await fetchClockSettings();
+      setTimeout(() => resultDiv.textContent = "", 3000);
+    } catch (err) {
+      resultDiv.style.color = "#ff7d4d";
+      resultDiv.textContent = "Save failed: " + normalizeErrorMessage(parseApiError(err));
+    }
+  });
+
+  // Manual Scheduler Trigger
+  triggerBtn.addEventListener("click", async () => {
+    triggerResult.textContent = "";
+    triggerBtn.disabled = true;
+    triggerBtn.textContent = "⏳ Triggering scheduler...";
+    try {
+      const res = await api("/api/v1/developer/trigger-scheduler", { method: "POST" });
+      triggerResult.style.color = "#4cff7c";
+      triggerResult.textContent = res.message || "Scheduler trigger completed.";
+      setTimeout(() => triggerResult.textContent = "", 4000);
+    } catch (err) {
+      triggerResult.style.color = "#ff7d4d";
+      triggerResult.textContent = "Trigger failed: " + normalizeErrorMessage(parseApiError(err));
+    } finally {
+      triggerBtn.disabled = false;
+      triggerBtn.textContent = "⚡ Trigger Scheduler Evaluation";
+    }
+  });
+
+  // Ticking display clock
+  if (state.developerClockInterval) clearInterval(state.developerClockInterval);
+  state.developerClockInterval = setInterval(() => {
+    if (!clockConfig.useCustomTime) {
+      const now = new Date();
+      metricDisplay.textContent = now.toISOString().replace("T", " ").substring(0, 19) + " UTC";
+    } else {
+      const realNow = new Date();
+      const baseReal = new Date(clockConfig.setAtRealTime);
+      const baseMock = new Date(clockConfig.customTime);
+      
+      const realElapsedSeconds = (realNow - baseReal) / 1000.0;
+      const mockElapsedSeconds = realElapsedSeconds * clockConfig.multiplier;
+      
+      const mockNow = new Date(baseMock.getTime() + mockElapsedSeconds * 1000.0);
+      metricDisplay.textContent = mockNow.toISOString().replace("T", " ").substring(0, 19) + " UTC";
+    }
+  }, 1000);
+
+  // --- Driver Spoofer Logic ---
+  const spDriverSelect = byId("spooferDriverSelect");
+  const spEnableCheckbox = byId("spooferEnableCheckbox");
+  const spJoyPanel = byId("joystickPanel");
+  const spLatDisplay = byId("spooferLatDisplay");
+  const spLngDisplay = byId("spooferLngDisplay");
+  
+  if (!spDriverSelect) return;
+
+  let spooferMap = null;
+  let spooferMarker = null;
+  let currentDriverCoords = [22.32414, 73.16594];
+  let mockedDriversList = [];
+
+  // Setup Leaflet map for spoofer
+  if (window.L && byId("spooferMap")) {
+    spooferMap = L.map("spooferMap").setView(currentDriverCoords, 13);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(spooferMap);
+  }
+
+  // Load active drivers list
+  async function loadDrivers() {
+    try {
+      const drivers = await api("/api/v1/developer/drivers");
+      spDriverSelect.innerHTML = '<option value="">-- Choose a Driver --</option>' +
+        drivers.map(d => `<option value="${d.id}">${d.full_name} (${d.license_number || "No Cab"})</option>`).join("");
+      
+      const spStatus = await api("/api/v1/developer/spoofer/status");
+      mockedDriversList = spStatus.mocked_drivers || [];
+    } catch (err) {
+      console.error("Failed to load spoofer configuration", err);
+    }
+  }
+
+  await loadDrivers();
+
+  // Helper to publish spoofer coordinates to backend
+  async function publishMockLocation(lat, lng) {
+    const driverId = spDriverSelect.value;
+    if (!driverId) return;
+    try {
+      await api("/api/v1/developer/mock-location", {
+        method: "POST",
+        body: JSON.stringify({
+          driver_id: driverId,
+          latitude: lat,
+          longitude: lng
+        })
+      });
+      spLatDisplay.textContent = lat.toFixed(6);
+      spLngDisplay.textContent = lng.toFixed(6);
+    } catch (err) {
+      console.warn("Failed to publish mock location", err);
+    }
+  }
+
+  // Move marker helper
+  function moveMockDriver(dy, dx) {
+    if (!spooferMarker) return;
+    const step = 0.00015; // smooth step size (approx 15 meters)
+    const pos = spooferMarker.getLatLng();
+    const newLat = pos.lat + (dy * step);
+    const newLng = pos.lng + (dx * step);
+    
+    spooferMarker.setLatLng([newLat, newLng]);
+    spooferMap.panTo([newLat, newLng]);
+    publishMockLocation(newLat, newLng);
+  }
+
+  // Checkbox state toggle
+  spEnableCheckbox.addEventListener("change", async () => {
+    const driverId = spDriverSelect.value;
+    if (!driverId) return;
+    const isEnabled = spEnableCheckbox.checked;
+    
+    try {
+      await api("/api/v1/developer/spoofer/toggle", {
+        method: "PUT",
+        body: JSON.stringify({
+          driver_id: driverId,
+          enabled: isEnabled
+        })
+      });
+      
+      if (isEnabled) {
+        if (!mockedDriversList.includes(driverId)) mockedDriversList.push(driverId);
+        spJoyPanel.style.opacity = "1";
+        spJoyPanel.style.pointerEvents = "auto";
+        if (spooferMarker) {
+          spooferMarker.dragging.enable();
+        }
+        publishMockLocation(currentDriverCoords[0], currentDriverCoords[1]);
+      } else {
+        mockedDriversList = mockedDriversList.filter(id => id !== driverId);
+        spJoyPanel.style.opacity = "0.5";
+        spJoyPanel.style.pointerEvents = "none";
+        if (spooferMarker) {
+          spooferMarker.dragging.disable();
+        }
+      }
+    } catch (err) {
+      console.error("Failed to toggle spoofer status", err);
+    }
+  });
+
+  // Dropdown change handler
+  spDriverSelect.addEventListener("change", async () => {
+    const driverId = spDriverSelect.value;
+    if (!driverId) {
+      spEnableCheckbox.disabled = true;
+      spEnableCheckbox.checked = false;
+      spJoyPanel.style.opacity = "0.5";
+      spJoyPanel.style.pointerEvents = "none";
+      if (spooferMarker) {
+        spooferMap.removeLayer(spooferMarker);
+        spooferMarker = null;
+      }
+      return;
+    }
+    
+    spEnableCheckbox.disabled = false;
+    const isMocked = mockedDriversList.includes(driverId);
+    spEnableCheckbox.checked = isMocked;
+    spJoyPanel.style.opacity = isMocked ? "1" : "0.5";
+    spJoyPanel.style.pointerEvents = isMocked ? "auto" : "none";
+
+    // Locate driver's current position (default to office if not found)
+    currentDriverCoords = [22.32414, 73.16594];
+    try {
+      const activeTracking = await api("/api/v1/tracking/active");
+      const record = activeTracking.find(t => t.driver_id === driverId);
+      if (record && record.latitude && record.longitude) {
+        currentDriverCoords = [record.latitude, record.longitude];
+      }
+    } catch (err) {
+      console.warn("Failed to retrieve driver location snapshot", err);
+    }
+
+    spLatDisplay.textContent = currentDriverCoords[0].toFixed(6);
+    spLngDisplay.textContent = currentDriverCoords[1].toFixed(6);
+
+    spooferMap.setView(currentDriverCoords, 14);
+
+    if (spooferMarker) {
+      spooferMap.removeLayer(spooferMarker);
+    }
+
+    spooferMarker = L.marker(currentDriverCoords, {
+      draggable: isMocked,
+      icon: L.divIcon({
+        className: 'spoofer-driver-icon',
+        html: `<div style="background-color: var(--accent); color: #000; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; border: 3px solid #000; box-shadow: 0 4px 8px rgba(0,0,0,0.5);">🚕</div>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
+      })
+    }).addTo(spooferMap);
+
+    spooferMarker.on("dragend", () => {
+      const pos = spooferMarker.getLatLng();
+      publishMockLocation(pos.lat, pos.lng);
+    });
+  });
+
+  // Joystick buttons click handlers
+  byId("joyUp").addEventListener("click", () => moveMockDriver(1, 0));
+  byId("joyDown").addEventListener("click", () => moveMockDriver(-1, 0));
+  byId("joyLeft").addEventListener("click", () => moveMockDriver(0, -1));
+  byId("joyRight").addEventListener("click", () => moveMockDriver(0, 1));
+
+  // Global Keyboard WASD controls
+  window.addEventListener("keydown", (e) => {
+    if (currentPage !== "developer") return;
+    if (!spEnableCheckbox.checked || !spDriverSelect.value) return;
+    if (document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+    
+    const key = e.key.toLowerCase();
+    if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) {
+      e.preventDefault();
+      let dy = 0, dx = 0;
+      if (key === "w" || key === "arrowup") dy = 1;
+      if (key === "s" || key === "arrowdown") dy = -1;
+      if (key === "a" || key === "arrowleft") dx = -1;
+      if (key === "d" || key === "arrowright") dx = 1;
+      moveMockDriver(dy, dx);
+    }
+  });
+}
 

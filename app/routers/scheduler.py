@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from app.core.database import ride_groups_col
 from app.routers.ride_groups import build_passenger_statuses
+from app.core.clock import get_now
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def spawn_recurring_rides():
       - departure_time matches current time (within the same minute)
       - no instance with today's ride_date already exists for this template
     """
-    now = datetime.datetime.utcnow()
+    now = get_now()
     # Convert UTC to IST (+5:30) for comparison with departure_time
     ist_offset = datetime.timedelta(hours=5, minutes=30)
     ist_now = now + ist_offset
@@ -69,7 +70,7 @@ def spawn_recurring_rides():
             "is_recurring": False,       # instances are not templates
             "recurrence_days": [],
             "departure_time": template.get("departure_time", ""),
-            "created_at": datetime.datetime.utcnow().isoformat()
+            "created_at": get_now().isoformat()
         }
         ride_groups_col.insert_one(instance)
         logger.info(f"[Scheduler] Spawned recurring ride instance {new_id} from template {template_id} for {today_date}")

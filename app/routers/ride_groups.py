@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from app.core.database import users_col, ride_groups_col, clean_user
 from app.core.auth import get_current_user_from_token
+from app.core.clock import get_now
 
 router = APIRouter(prefix="/api/v1/ride-groups", tags=["Ride Groups"])
 
@@ -169,7 +170,7 @@ def create_ride_group(payload: RideGroupCreate, current_user: dict = Depends(get
         "is_recurring": payload.is_recurring or False,
         "recurrence_days": payload.recurrence_days or [],
         "departure_time": payload.departure_time or "",
-        "created_at": datetime.datetime.utcnow().isoformat()
+        "created_at": get_now().isoformat()
     }
     
     ride_groups_col.insert_one(group_doc)
@@ -266,7 +267,7 @@ def update_passenger_status(
         )
 
     current_status = passenger_statuses[passenger_id].get("status", "pending")
-    now = datetime.datetime.utcnow().isoformat()
+    now = get_now().isoformat()
     next_status = dict(passenger_statuses[passenger_id])
 
     if target_status == "picked_up":

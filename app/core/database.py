@@ -44,6 +44,18 @@ if not users_col.find_one({"email": "supervisor@aditiconsulting.com"}):
         "mobile_number": "+91 00000 00000",
     })
 
+# Seed developer account if not present
+if not users_col.find_one({"email": "developer@aditiconsulting.com"}):
+    users_col.insert_one({
+        "id": "developer-id-001",
+        "full_name": "Demo Developer",
+        "email": "developer@aditiconsulting.com",
+        "password": "D3V310P312",
+        "role": "developer",
+        "status": "approved",
+        "mobile_number": "+91 99999 99999",
+    })
+
 def clean_user(doc: dict) -> Optional[dict]:
     if not doc:
         return None

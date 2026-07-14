@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 # Core internal utility dependencies
 from app.core.database import users_col, clean_user
 from app.core.auth import get_current_user_from_token, generate_token, validate_employee_email
-from app.routers import analytics, rides, tracking, notification, ride_groups, availability
+from app.routers import analytics, rides, tracking, notification, ride_groups, availability, developer
 from app.routers.scheduler import start_scheduler
 
 _scheduler = None
@@ -125,6 +125,30 @@ def me(current_user: dict = Depends(get_current_user_from_token)):
         "pickup_point": current_user.get("pickup_point")
     }
 
+@app.get("/api/v1/clock")
+def get_system_clock(current_user: dict = Depends(get_current_user_from_token)):
+    from app.core.clock import get_now, get_today_ist
+    from app.core.database import db
+    settings = db["system_settings"].find_one({"key": "clock"})
+    use_custom = False
+    multiplier = 1.0
+    custom_time = ""
+    set_at_real_time = ""
+    if settings:
+        use_custom = settings.get("use_custom_time", False)
+        multiplier = settings.get("multiplier", 1.0)
+        custom_time = settings.get("custom_time")
+        set_at_real_time = settings.get("set_at_real_time")
+        
+    return {
+        "use_custom_time": use_custom,
+        "custom_time": custom_time,
+        "set_at_real_time": set_at_real_time,
+        "multiplier": multiplier,
+        "virtual_now": get_now().isoformat(),
+        "virtual_today_ist": get_today_ist().isoformat()
+    }
+
 @app.put("/api/v1/users/me/pickup-point")
 def update_pickup_point(payload: PickupPointRequest, current_user: dict = Depends(get_current_user_from_token)):
     pickup_data = {
@@ -186,6 +210,7 @@ app.include_router(tracking.router)
 app.include_router(notification.router)
 app.include_router(ride_groups.router)
 app.include_router(availability.router)
+app.include_router(developer.router)
 
 # --- Static Frontend Serving ---
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

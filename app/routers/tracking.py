@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from pydantic import BaseModel
 from app.core.database import db
 from app.core.auth import get_current_user_from_token, decode_token
+from app.core.clock import get_now
 
 router = APIRouter(prefix="/api/v1", tags=["Tracking & AI"])
 tracking_col = db["tracking"]
@@ -49,7 +50,7 @@ manager = ConnectionManager()
 
 
 def format_relative_time(dt: datetime.datetime) -> str:
-    now = datetime.datetime.utcnow()
+    now = get_now()
     diff = now - dt
     seconds = diff.total_seconds()
     if seconds < 60:
@@ -98,6 +99,13 @@ async def ws_driver_tracking(websocket: WebSocket):
             driver_doc = users_col.find_one({"email": user["email"].lower()})
             driver_id = driver_doc["id"] if driver_doc else user["email"]
             
+            # Check if developer spoofer is active for this driver
+            settings = db["system_settings"].find_one({"key": "spoofer"})
+            mocked_drivers = settings.get("mocked_drivers", []) if settings else []
+            if driver_id in mocked_drivers:
+                await websocket.send_json({"status": "ignored_due_to_spoofer"})
+                continue
+
             # Restrict to active drivers only
             active_drivers = get_active_driver_ids()
             if driver_id not in active_drivers:
@@ -107,7 +115,7 @@ async def ws_driver_tracking(websocket: WebSocket):
             driver_name = driver_doc.get("full_name", "Driver") if driver_doc else "Driver"
             cab_number = (driver_doc.get("license_number") or "Cab") if driver_doc else "Cab"
 
-            now = datetime.datetime.utcnow()
+            now = get_now()
             tracking_doc = {
                 "driver_id": driver_id,
                 "driver_name": driver_name,
@@ -150,7 +158,7 @@ async def ws_tracking_watch(websocket: WebSocket):
     await manager.connect_watcher(websocket)
     try:
         # Send the current snapshot immediately on connect (only active cabs)
-        cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=15)
+        cutoff = get_now() - datetime.timedelta(minutes=15)
         active_drivers = get_active_driver_ids()
         active = list(tracking_col.find({
             "driver_id": {"$in": active_drivers},
@@ -196,6 +204,12 @@ def update_location(payload: LocationUpdate, current_user: dict = Depends(get_cu
     if current_user["role"] != "driver":
         raise HTTPException(status_code=403, detail="Only drivers can update location")
     
+    # Check if developer spoofer is active for this driver
+    settings = db["system_settings"].find_one({"key": "spoofer"})
+    mocked_drivers = settings.get("mocked_drivers", []) if settings else []
+    if current_user["id"] in mocked_drivers:
+        return {"status": "ignored_due_to_spoofer"}
+
     active_drivers = get_active_driver_ids()
     if current_user["id"] not in active_drivers:
         raise HTTPException(status_code=403, detail="Location updates are only allowed during active rides")
@@ -207,7 +221,7 @@ def update_location(payload: LocationUpdate, current_user: dict = Depends(get_cu
         "cab_number": cab_number,
         "latitude": payload.latitude,
         "longitude": payload.longitude,
-        "updated_at": datetime.datetime.utcnow()
+        "updated_at": get_now()
     }
     tracking_col.update_one(
         {"driver_id": current_user["id"]},
@@ -219,7 +233,7 @@ def update_location(payload: LocationUpdate, current_user: dict = Depends(get_cu
 
 @router.get("/tracking/active")
 def get_active_tracking(current_user: dict = Depends(get_current_user_from_token)):
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=15)
+    cutoff = get_now() - datetime.timedelta(minutes=15)
     active_drivers = get_active_driver_ids()
     active_locations = list(tracking_col.find({
         "driver_id": {"$in": active_drivers},

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.core.auth import get_current_user_from_token
 from app.core.database import availability_col, notifications_col, ride_groups_col, users_col
 from app.routers.tracking import manager
+from app.core.clock import get_now, get_today_ist
 
 router = APIRouter(prefix="/api/v1/availability", tags=["Employee Availability"])
 
@@ -36,7 +37,7 @@ class AvailabilityRequest(BaseModel):
 
 
 def _today_iso() -> str:
-    return datetime.date.today().isoformat()
+    return get_today_ist().isoformat()
 
 
 def _parse_trip_date(value: str) -> datetime.date:
@@ -44,7 +45,7 @@ def _parse_trip_date(value: str) -> datetime.date:
         parsed = datetime.date.fromisoformat(value)
     except ValueError:
         raise HTTPException(status_code=400, detail="Date must be in YYYY-MM-DD format")
-    if parsed < datetime.date.today():
+    if parsed < get_today_ist():
         raise HTTPException(status_code=400, detail="Past dates are not allowed")
     return parsed
 
@@ -136,8 +137,8 @@ def _validate_deadline(group: Optional[dict], trip_date: str):
         dep_date = datetime.date.fromisoformat(trip_date)
         departure_dt = datetime.datetime.combine(dep_date, datetime.time(dep_hour, dep_minute))
         
-        # IST offset: +5:30
-        ist_now = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        # Calculate deadline: 4 hours before departure
+        ist_now = get_now() + datetime.timedelta(hours=5, minutes=30)
         
         time_diff = departure_dt - ist_now
         if time_diff.total_seconds() < 4 * 3600:
@@ -189,7 +190,7 @@ def _notification_recipients(group: Optional[dict]) -> list[str]:
 
 def _save_notifications(employee_name: str, trip_date: str, pickup_not_needed: bool, drop_not_needed: bool, group: Optional[dict], cancelled: bool = False):
     message = _availability_message(employee_name, trip_date, pickup_not_needed, drop_not_needed, cancelled=cancelled)
-    now = datetime.datetime.utcnow().isoformat()
+    now = get_now().isoformat()
     docs = []
     for recipient_id in _notification_recipients(group):
         docs.append({
@@ -276,7 +277,7 @@ def get_my_availability(
             dep_hour, dep_minute = map(int, group["departure_time"].split(":"))
             dep_date = datetime.date.fromisoformat(trip_date)
             departure_dt = datetime.datetime.combine(dep_date, datetime.time(dep_hour, dep_minute))
-            ist_now = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+            ist_now = get_now() + datetime.timedelta(hours=5, minutes=30)
             if (departure_dt - ist_now).total_seconds() < 4 * 3600:
                 can_change = False
         except Exception:
@@ -326,7 +327,7 @@ async def upsert_my_availability(
 
     _validate_deadline(group, trip_date)
 
-    now = datetime.datetime.utcnow().isoformat()
+    now = get_now().isoformat()
     existing = availability_col.find_one({"employee_id": current_user["id"], "date": trip_date})
     availability_id = existing.get("id") if existing else str(uuid.uuid4())
     created_at = existing.get("created_at") if existing else now

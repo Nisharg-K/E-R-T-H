@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>E.R.T.H | Developer Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/main.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="../js/app.js?v=2.0"></script>
+</head>
+<body data-page="developer">
+  <div class="app-shell">
+    <aside class="app-sidebar">
+      <a class="brand" href="./developer.html">
+        <span class="brand-mark">ERTH</span>
+        <span class="brand-copy"><strong>Developer</strong></span>
+      </a>
+      <nav class="nav-list">
+        <a class="nav-item active" href="#">Time Controls</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="sessionBadge" class="session-badge">Signed out</span>
+        <button id="logoutButton" class="ghost-button" type="button">Sign out</button>
+      </div>
+    </aside>
+
+    <main class="app-main">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Secret Developer Portal</p>
+          <h1>Presentation Time Machine Controls</h1>
+        </div>
+      </header>
+
+      <section class="metrics-row">
+        <article class="metric-card">
+          <span>Virtual Clock Mode</span>
+          <strong id="metricClockMode">Real Time</strong>
+        </article>
+        <article class="metric-card">
+          <span>Virtual Time Speed</span>
+          <strong id="metricClockSpeed">1.0x</strong>
+        </article>
+        <article class="metric-card">
+          <span>Current Virtual Time (UTC)</span>
+          <strong id="metricClockDisplay">--:--:--</strong>
+        </article>
+      </section>
+
+      <section class="dashboard-grid" style="grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 24px;">
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Configuration</p>
+              <h3>Virtual Time Clock Settings</h3>
+            </div>
+          </div>
+          <form id="clockConfigForm" class="auth-form" style="padding: 0; display: flex; flex-direction: column; gap: 16px;">
+            <div class="availability-toggle-row" style="margin-bottom: 8px;">
+              <label class="availability-toggle">
+                <input id="useCustomTime" name="use_custom_time" type="checkbox" />
+                <span style="font-weight: 600;">Enable Custom Mock Clock</span>
+              </label>
+            </div>
+            
+            <div class="form-group" id="customTimeGroup">
+              <label for="customTimeInput">Base custom datetime *</label>
+              <input id="customTimeInput" name="custom_time" type="datetime-local" step="1" required />
+              <p style="font-size: 0.75rem; color: var(--muted); margin-top: 4px;">Set the initial virtual starting time (UTC timezone context).</p>
+            </div>
+
+            <div class="form-group">
+              <label for="multiplierInput">Time speed multiplier (Fast-forward) *</label>
+              <div style="display: flex; gap: 12px; align-items: center;">
+                <input id="multiplierInput" name="multiplier" type="number" step="0.1" min="0" max="10000" value="1.0" required style="flex: 1;" />
+                <select id="presetMultiplier" style="padding: 10px; border-radius: 8px; border: 1px solid var(--border); background-color: var(--card-bg); color: var(--text);">
+                  <option value="1.0">1x (Real Time)</option>
+                  <option value="10.0">10x</option>
+                  <option value="60.0">60x (1m/s)</option>
+                  <option value="3600.0">3600x (1h/s)</option>
+                  <option value="0.0">0x (Frozen)</option>
+                </select>
+              </div>
+              <p style="font-size: 0.75rem; color: var(--muted); margin-top: 4px;">Controls speed of mock clock tick. 60x means 1 minute passes every real second.</p>
+            </div>
+
+            <button type="submit" class="primary-button" id="saveClockBtn" style="margin-top: 12px;">Apply Settings</button>
+            <div id="clockFormResult" class="form-result"></div>
+          </form>
+        </section>
+
+        <section class="card" style="display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Demo utilities</p>
+                <h3>Force Scheduler Actions</h3>
+              </div>
+            </div>
+            <p style="font-size: 0.85rem; color: var(--muted); margin-bottom: 20px; line-height: 1.5;">
+              APScheduler periodically checks recurring templates once a minute in real time. For demonstration purposes, you can trigger the scheduler evaluation manually at the current virtual clock time to instantly spawn ride group instances.
+            </p>
+          </div>
+          <div>
+            <button type="button" class="primary-button" id="triggerSchedulerBtn" style="width: 100%; padding: 14px; font-weight: 700; background: var(--accent); color: #000;">
+              ⚡ Trigger Scheduler Evaluation
+            </button>
+            <div id="triggerResult" class="form-result" style="margin-top: 12px;"></div>
+          </div>
+        </section>
+      </section>
+
+      <!-- Driver Location Spoofer Section -->
+      <section class="card" style="margin-top: 24px;">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Real-Time Presentation Controls</p>
+            <h3>Driver GPS Location Spoofer</h3>
+          </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; margin-top: 16px;">
+          <!-- Controls Column -->
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            <div class="form-group">
+              <label for="spooferDriverSelect">Select Driver to Spoof</label>
+              <select id="spooferDriverSelect" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); background-color: var(--card-bg); color: var(--text);">
+                <option value="">-- Choose a Driver --</option>
+              </select>
+            </div>
+            
+            <div class="availability-toggle-row">
+              <label class="availability-toggle">
+                <input id="spooferEnableCheckbox" type="checkbox" disabled />
+                <span style="font-weight: 600;">Enable Mock Location Override</span>
+              </label>
+            </div>
+
+            <!-- Virtual Joystick Container -->
+            <div id="joystickPanel" style="opacity: 0.5; pointer-events: none; transition: opacity 0.3s ease; display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 8px;">
+              <span style="font-size: 0.85rem; font-weight: 600; color: var(--accent);">Onscreen Controller</span>
+              
+              <!-- D-Pad Keypad -->
+              <div style="display: grid; grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 50px); gap: 6px; justify-content: center; align-content: center;">
+                <div></div>
+                <button type="button" id="joyUp" class="primary-button" style="padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; background: var(--border); color: var(--text); border-radius: 8px; border: 1px solid var(--border);">W</button>
+                <div></div>
+                <button type="button" id="joyLeft" class="primary-button" style="padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; background: var(--border); color: var(--text); border-radius: 8px; border: 1px solid var(--border);">A</button>
+                <div style="display: flex; align-items: center; justify-content: center; font-size: 1.5rem; color: var(--accent);">🕹️</div>
+                <button type="button" id="joyRight" class="primary-button" style="padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; background: var(--border); color: var(--text); border-radius: 8px; border: 1px solid var(--border);">D</button>
+                <div></div>
+                <button type="button" id="joyDown" class="primary-button" style="padding: 0; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; background: var(--border); color: var(--text); border-radius: 8px; border: 1px solid var(--border);">S</button>
+                <div></div>
+              </div>
+              
+              <p style="font-size: 0.75rem; color: var(--muted); text-align: center; line-height: 1.4;">
+                Click buttons above or use <strong style="color: var(--text);">W / A / S / D</strong> keys on your keyboard to drive the cab.
+              </p>
+            </div>
+
+            <!-- telemetry readouts -->
+            <div style="background-color: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; font-family: monospace; font-size: 0.85rem;">
+              <div>Latitude: <strong id="spooferLatDisplay">--.-----</strong></div>
+              <div>Longitude: <strong id="spooferLngDisplay">--.-----</strong></div>
+            </div>
+          </div>
+          
+          <!-- Map Column -->
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <span style="font-size: 0.85rem; font-weight: 600; color: var(--muted);">Spoofing Map Position (Drag marker to teleport)</span>
+            <div id="spooferMap" style="height: 380px; width: 100%; border-radius: 8px; border: 1px solid var(--border); background-color: #1a1a1a;"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
