@@ -73,6 +73,7 @@ def get_rides(
                     "original_order": item["order"],
                     "pickup_label": pk.get("label") if (pk and isinstance(pk, dict)) else "Preferred Pickup Location",
                     "latitude": pk.get("latitude") if (pk and isinstance(pk, dict)) else None,
+                    "longitude": pk.get("longitude") if (pk and isinstance(pk, dict)) else None,
                     "availability_status": availability.get("status_label"),
                     "trip_status": passenger_statuses.get(item["user_id"], default_passenger_status())
                 })

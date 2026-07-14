@@ -24,6 +24,7 @@
         <a class="nav-item" id="navRideHistory" href="#">Ride History</a>
         <a class="nav-item" id="navCabUnavailability" href="#">Cab Unavailability</a>
         <a class="nav-item" id="navDailyPickup" href="#">Daily Pickup Point</a>
+        <a class="nav-item" id="navCalendar" href="#">Calendar</a>
       </nav>
       <div class="sidebar-footer">
         <span id="sessionBadge" class="session-badge">Signed out</span>
@@ -35,7 +36,7 @@
       <header class="app-header">
         <div>
           <p class="eyebrow">Employee dashboard</p>
-          <h1>Your cab schedule, live updates, and trip history</h1>
+          <h1 id="rolePageTitle">Your cab schedule, live updates, and trip history</h1>
         </div>
         <div class="site-actions" style="display: flex; gap: 12px; align-items: center;">
           <span id="routeDateDisplay" style="font-size: 0.85rem; color: var(--muted);"></span>
@@ -47,6 +48,7 @@
         </div>
       </header>
 
+      <div id="rideDashboardSection">
       <section class="metrics-row">
         <article class="metric-card"><span>Assigned rides</span><strong id="metricAssigned">0</strong></article>
         <article class="metric-card"><span>Active ride</span><strong id="metricCurrentStatus">None</strong></article>
@@ -150,6 +152,24 @@
           </section>
         </section>
       </div>
+      </div>
+
+      <section id="calendarSection" class="card" style="display: none;">
+        <div id="calendarModule" class="calendar-module">
+          <div class="calendar-toolbar">
+            <div><p class="eyebrow">Schedule</p><h3 id="calendarMonthLabel">Calendar</h3></div>
+            <div id="calendarMonthTabs" class="calendar-month-tabs"></div>
+          </div>
+          <div id="calendarLegend" class="calendar-legend"></div>
+          <div class="calendar-shell">
+            <div id="calendarGrid" class="calendar-grid"></div>
+            <aside class="calendar-side">
+              <div id="calendarRerouteSummary" class="calendar-reroute-summary"></div>
+              <div id="calendarDetails" class="calendar-details"></div>
+            </aside>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 </body>
