@@ -253,9 +253,15 @@ function updateMap(markers) {
 
   // --- Role 2: Driver ---
   else if (role === "driver") {
+    // If driver is spoofed, set driverLatLng to the mock location from watchers
+    const activeMock = (markers || []).find(m => m.driver_id === state.currentUser?.id);
+    if (activeMock) {
+      state.driverLatLng = [activeMock.latitude, activeMock.longitude];
+    }
+
     // "Pickup plan, 1,2,3....n. Only when ride is on."
     const ride = state.currentRide;
-    const isRideOn = ride && (ride.status === "started" || ride.status === "ongoing");
+    const isRideOn = ride && (ride.status === "started" || ride.status === "ongoing" || ride.status === "pending");
     
     // Draw driver self position marker
     if (state.driverLatLng) {
@@ -367,7 +373,7 @@ function updateMap(markers) {
   else if (role === "employee") {
     // "Live Location of only their current driver (no further route)... Only when Ride is on."
     const ride = state.currentRide;
-    const isRideOn = ride && (ride.status === "started" || ride.status === "ongoing");
+    const isRideOn = ride && (ride.status === "started" || ride.status === "ongoing" || ride.status === "pending");
 
     // Draw employee's own pickup marker if they have one configured
     const saved = state.currentUser?.pickup_point;
@@ -1635,7 +1641,7 @@ async function loadAdminPage() {
   updateNotificationState(notifications || []);
   updateMap(active || []);
   startNotificationPolling();
-  startTrackingPolling();
+  startTrackingWebSocket();
   loadAllAvailabilityLogs().catch(() => {});
 
   const bell = byId("notificationBell");
@@ -2270,7 +2276,7 @@ async function loadRoleRidePage(filterFn) {
   setupCalendarInteractions();
   await loadCalendarModule();
   startNotificationPolling();
-  startTrackingPolling();
+  startTrackingWebSocket();
 
   const bell = byId("notificationBell");
   if (bell && !bell.dataset.bound) {

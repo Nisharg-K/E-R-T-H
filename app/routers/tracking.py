@@ -11,10 +11,20 @@ router = APIRouter(prefix="/api/v1", tags=["Tracking & AI"])
 tracking_col = db["tracking"]
 
 def get_active_driver_ids() -> List[str]:
-    # A driver is active if they are assigned to a ride group whose status is started or ongoing
+    # A driver is active if they are assigned to a ride group whose status is pending, started, or ongoing,
+    # OR if they are currently being spoofed from the developer portal
     ride_groups_col = db["ride_groups"]
-    active_groups = list(ride_groups_col.find({"status": {"$in": ["started", "ongoing"]}}))
-    return [g["driver_id"] for g in active_groups if g.get("driver_id")]
+    active_groups = list(ride_groups_col.find({"status": {"$in": ["pending", "started", "ongoing"]}}))
+    drivers = [g["driver_id"] for g in active_groups if g.get("driver_id")]
+    
+    # Check spoofed drivers
+    settings = db["system_settings"].find_one({"key": "spoofer"})
+    mocked_drivers = settings.get("mocked_drivers", []) if settings else []
+    for d_id in mocked_drivers:
+        if d_id not in drivers:
+            drivers.append(d_id)
+            
+    return drivers
 
 
 
