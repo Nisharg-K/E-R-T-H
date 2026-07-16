@@ -1463,7 +1463,25 @@ function renderCurrentRide(containerId, ride, label) {
     (ride.pickup_order || []).forEach(p => passengers.push({ id: p.user_id, full_name: p.full_name || "Passenger", trip_status: p.trip_status || {} }));
   }
 
-  if (passengers.length) {
+  if (state.currentUser?.role === "driver") {
+    const renderLeg = (title, stops, start, end) => {
+      const items = (stops || []).map(stop => `<li>${escapeHtml(stop.full_name || "Passenger")}</li>`).join("");
+      return `
+        <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
+          <strong style="font-size: 0.85rem; color: var(--muted);">${title}</strong>
+          <ol style="margin: 4px 0 0 16px; font-size: 0.85rem; line-height: 1.4;">
+            ${start ? `<li><strong>${start}</strong></li>` : ""}
+            ${items || "<li><em>No employee stops for this leg</em></li>"}
+            ${end ? `<li><strong>${end}</strong></li>` : ""}
+          </ol>
+        </div>
+      `;
+    };
+    // Both arrays come from the backend's date-specific route projection.
+    // No client-side availability filtering is performed here.
+    sequenceHtml = renderLeg("Pickup route", ride.pickup_order, "", "Aditi Vadodara Office") +
+      renderLeg("Drop route", ride.drop_order, "Aditi Vadodara Office", "");
+  } else if (passengers.length) {
       const listItems = passengers.map((p) => {
       const isMe = state.currentUser && state.currentUser.id === p.id;
       const boarded = p.trip_status?.boarded;
@@ -1728,11 +1746,11 @@ function initAvailabilityForm() {
         informBtn.disabled = false;
         cancelBtn.disabled = false;
       } else {
-        deadlineDiv.innerHTML = "⚠️ You are not currently assigned to a ride group for this date.";
-        deadlineDiv.style.color = "#ff7d4d";
+        deadlineDiv.innerHTML = "You can record your availability even when no ride is assigned. Admin and supervisors will be notified.";
+        deadlineDiv.style.color = "var(--muted)";
         deadlineDiv.style.display = "block";
-        informBtn.disabled = true;
-        cancelBtn.disabled = true;
+        informBtn.disabled = false;
+        cancelBtn.disabled = false;
       }
       
     } catch (err) {
@@ -1842,7 +1860,7 @@ function initAvailabilityForm() {
       resultDiv.textContent = "Submitting...";
       
       try {
-        await api("/api/v1/availability/me", {
+        const savedAvailability = await api("/api/v1/availability/me", {
           method: "PUT",
           body: JSON.stringify({
             date: date,
@@ -1852,8 +1870,10 @@ function initAvailabilityForm() {
           })
         });
         
-        resultDiv.style.color = "#4cff7c";
-        resultDiv.textContent = `✓ Successfully informed: ${statusText}`;
+        resultDiv.style.color = savedAvailability.already_informed ? "var(--muted)" : "#4cff7c";
+        resultDiv.textContent = savedAvailability.already_informed
+          ? savedAvailability.message
+          : `✓ Successfully informed: ${statusText}`;
         
         // Reload the availability and history
         await loadAvailabilityForDate(date);

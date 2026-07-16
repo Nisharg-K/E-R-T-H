@@ -112,8 +112,9 @@ def _find_relevant_group(employee_id: str, trip_date: str) -> Optional[dict]:
         if _is_recurring_date(group, trip_date):
             return group
     
-    # Fallback: return first recurring group if any (for backward compatibility)
-    return recurring_groups[0] if recurring_groups else None
+    # Availability can be recorded without a matching service ride. In that
+    # case, no route or driver-specific deadline needs to be applied.
+    return None
 
 
 def _trip_started(group: Optional[dict], trip_date: str) -> bool:
@@ -188,21 +189,36 @@ def _notification_recipients(group: Optional[dict]) -> list[str]:
     return list(dict.fromkeys(recipients))
 
 
-def _save_notifications(employee_name: str, trip_date: str, pickup_not_needed: bool, drop_not_needed: bool, group: Optional[dict], cancelled: bool = False):
+def _save_notifications(employee_id: str, employee_name: str, trip_date: str, pickup_not_needed: bool, drop_not_needed: bool, group: Optional[dict], cancelled: bool = False):
+    """Create one availability notification per recipient/date, then update it."""
     message = _availability_message(employee_name, trip_date, pickup_not_needed, drop_not_needed, cancelled=cancelled)
     now = get_now().isoformat()
-    docs = []
     for recipient_id in _notification_recipients(group):
-        docs.append({
-            "id": str(uuid.uuid4()),
-            "recipient_id": recipient_id,
-            "title": "Pickup/Drop Availability Updated",
-            "message": message,
-            "is_read": False,
-            "created_at": now,
-        })
-    if docs:
-        notifications_col.insert_many(docs)
+        notifications_col.update_one(
+            {
+                "recipient_id": recipient_id,
+                "notification_type": "availability",
+                "availability_employee_id": employee_id,
+                "availability_date": trip_date,
+            },
+            {
+                "$set": {
+                    "title": "Pickup/Drop Availability Updated",
+                    "message": message,
+                    "is_read": False,
+                    "updated_at": now,
+                },
+                "$setOnInsert": {
+                    "id": str(uuid.uuid4()),
+                    "recipient_id": recipient_id,
+                    "notification_type": "availability",
+                    "availability_employee_id": employee_id,
+                    "availability_date": trip_date,
+                    "created_at": now,
+                },
+            },
+            upsert=True,
+        )
 
 
 async def _broadcast_route_change(employee_id: str, trip_date: str, group: Optional[dict], message: str):
@@ -307,28 +323,33 @@ async def upsert_my_availability(
     trip_date = _parse_trip_date(payload.date).isoformat()
     group = _find_relevant_group(current_user["id"], trip_date)
     
-    # Check if employee is assigned to any ride group
-    if not group:
-        raise HTTPException(
-            status_code=400, 
-            detail="You are not assigned to any ride group. Please contact your supervisor to be added to a ride group before submitting availability exceptions."
-        )
-    
-    # Check if the date is a valid recurring date for the group
-    if group.get("recurrence_days") and not _is_recurring_date(group, trip_date):
-        formatted_days = ", ".join(day.upper() for day in group.get("recurrence_days", []))
-        raise HTTPException(
-            status_code=400, 
-            detail=f"The selected date does not fall on a scheduled service day for your ride group. Your group operates on: {formatted_days}"
-        )
-    
+    # Employees may record an exception without an assignment. If a matching
+    # ride exists, its driver receives the normal notification and refresh.
     if _trip_started(group, trip_date):
         raise HTTPException(status_code=400, detail="Availability cannot be changed after the affected trip has started")
 
     _validate_deadline(group, trip_date)
 
-    now = get_now().isoformat()
     existing = availability_col.find_one({"employee_id": current_user["id"], "date": trip_date})
+    reason = payload.reason.strip() if payload.reason else None
+    expected_group_id = group.get("id") if group else None
+    expected_driver_id = group.get("driver_id") if group else None
+    if existing and (
+        bool(existing.get("pickup_not_needed")) == payload.pickup_not_needed
+        and bool(existing.get("drop_not_needed")) == payload.drop_not_needed
+        and (existing.get("reason") or None) == reason
+        and existing.get("ride_group_id") == expected_group_id
+        and existing.get("assigned_driver_id") == expected_driver_id
+    ):
+        response = _clean(existing)
+        response.update({
+            "already_informed": True,
+            "notification_sent": False,
+            "message": "You have already informed this availability for the selected date. Change an option or reason to update it.",
+        })
+        return response
+
+    now = get_now().isoformat()
     availability_id = existing.get("id") if existing else str(uuid.uuid4())
     created_at = existing.get("created_at") if existing else now
     doc = {
@@ -342,9 +363,9 @@ async def upsert_my_availability(
         "drop_required": not payload.drop_not_needed,
         "no_cab_required": payload.pickup_not_needed and payload.drop_not_needed,
         "status_label": _status_label(payload.pickup_not_needed, payload.drop_not_needed),
-        "reason": payload.reason,
-        "ride_group_id": group.get("id") if group else None,
-        "assigned_driver_id": group.get("driver_id") if group else None,
+        "reason": reason,
+        "ride_group_id": expected_group_id,
+        "assigned_driver_id": expected_driver_id,
         "updated_at": now,
     }
 
@@ -356,6 +377,7 @@ async def upsert_my_availability(
 
     saved = availability_col.find_one({"employee_id": current_user["id"], "date": trip_date})
     _save_notifications(
+        current_user["id"],
         current_user["full_name"],
         trip_date,
         payload.pickup_not_needed,
@@ -364,7 +386,9 @@ async def upsert_my_availability(
     )
     message = _availability_message(current_user["full_name"], trip_date, payload.pickup_not_needed, payload.drop_not_needed)
     await _broadcast_route_change(current_user["id"], trip_date, group, message)
-    return _clean(saved)
+    response = _clean(saved)
+    response.update({"already_informed": False, "notification_sent": True})
+    return response
 
 
 @router.delete("/me/{date}")
@@ -389,7 +413,7 @@ async def cancel_my_availability(
     _validate_deadline(group, trip_date)
 
     availability_col.delete_one({"employee_id": current_user["id"], "date": trip_date})
-    _save_notifications(current_user["full_name"], trip_date, False, False, group, cancelled=True)
+    _save_notifications(current_user["id"], current_user["full_name"], trip_date, False, False, group, cancelled=True)
     message = _availability_message(current_user["full_name"], trip_date, False, False, cancelled=True)
     await _broadcast_route_change(current_user["id"], trip_date, group, message)
     return {"status": "success", "message": "Pickup/drop exception cancelled"}
