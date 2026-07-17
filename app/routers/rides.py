@@ -41,14 +41,26 @@ def get_rides(
         cab_number = driver.get("license_number") or "Cab" if driver else "N/A"
         
         # Determine pickup/drop display based on sorted lists
+        is_drop = (g.get("route_type") or "pickup") == "drop"
         p_names = [po["full_name"] for po in effective_route["pickup_order"]]
+        d_names = [do["full_name"] for do in effective_route["drop_order"]]
+        
         if role == "employee":
             pk = current_user.get("pickup_point")
-            pickup = pk.get("label") if (pk and isinstance(pk, dict)) else "Preferred Pickup Location"
-            drop = "Aditi Vadodara Office"
+            home_loc = pk.get("label") if (pk and isinstance(pk, dict)) else "Preferred Pickup Location"
+            if is_drop:
+                pickup = "Aditi Vadodara Office"
+                drop = home_loc
+            else:
+                pickup = home_loc
+                drop = "Aditi Vadodara Office"
         else:
-            pickup = f"Route: " + " → ".join(p_names) if p_names else "Morning Route"
-            drop = "Aditi Vadodara Office"
+            if is_drop:
+                pickup = "Aditi Vadodara Office"
+                drop = f"Route: " + " → ".join(d_names) if d_names else "Evening Route"
+            else:
+                pickup = f"Route: " + " → ".join(p_names) if p_names else "Morning Route"
+                drop = "Aditi Vadodara Office"
 
         resolved_rides.append({
             "id": g["id"],
@@ -59,6 +71,7 @@ def get_rides(
             "status": g.get("status", "pending"),
             "delay_minutes": g.get("delay_minutes", 0),
             "total_cost": g.get("total_cost", 150.00),
+            "route_type": g.get("route_type") or "pickup",
             **effective_route,
             "trip_date": trip_date,
             "assigned_driver_id": g["driver_id"],

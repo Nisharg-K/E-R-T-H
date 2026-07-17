@@ -339,3 +339,98 @@ def board_current_ride(
         "passenger_id": current_user["id"],
         **next_status,
     }
+
+
+@router.post("/rides/{ride_group_id}/reach-home")
+def reach_home_current_ride(
+    ride_group_id: str,
+    current_user: dict = Depends(get_current_user_from_token),
+):
+    if current_user.get("role") != "employee":
+        raise HTTPException(status_code=403, detail="Only employees can mark themselves as reached home")
+
+    group = ride_groups_col.find_one({"id": ride_group_id, "passenger_ids": current_user["id"]})
+    if not group:
+        raise HTTPException(status_code=404, detail="Active ride assignment not found")
+    if group.get("status") not in ("started", "ongoing"):
+        raise HTTPException(status_code=400, detail="Reaching home is only available for active rides")
+
+    passenger_statuses = build_passenger_statuses(group.get("passenger_ids", []), group.get("passenger_statuses"))
+    current_status = passenger_statuses.get(current_user["id"], default_passenger_status())
+    
+    if current_status.get("status") == "dropped":
+        return {
+            "ride_group_id": ride_group_id,
+            "passenger_id": current_user["id"],
+            **current_status,
+        }
+
+    next_status = {
+        **current_status,
+        "status": "dropped",
+        "dropped_at": datetime.datetime.utcnow().isoformat(),
+    }
+    
+    # Also update boarding status to True if not boarded (for drop trips they automatically start boarded)
+    if not next_status.get("boarded"):
+        next_status["boarded"] = True
+        next_status["boarded_at"] = datetime.datetime.utcnow().isoformat()
+        
+    ride_groups_col.update_one(
+        {"id": ride_group_id},
+        {"$set": {f"passenger_statuses.{current_user['id']}": next_status}},
+    )
+    
+    # Create notifications for driver and supervisors/admins
+    now = datetime.datetime.utcnow().isoformat()
+    message = f"{current_user.get('full_name', 'Employee')} has reached home."
+    docs = []
+    
+    # driver recipient
+    driver_id = group.get('driver_id')
+    if driver_id:
+        docs.append({
+            'id': str(uuid.uuid4()),
+            'recipient_id': driver_id,
+            'title': 'Passenger Reached Home',
+            'message': message,
+            'is_read': False,
+            'created_at': now
+        })
+    # supervisors and admins
+    for u in users_col.find({"$or": [{"role": "supervisor"}, {"role": "admin"}], "status": "approved"}):
+        docs.append({
+            'id': str(uuid.uuid4()),
+            'recipient_id': u['id'],
+            'title': 'Passenger Reached Home',
+            'message': message,
+            'is_read': False,
+            'created_at': now
+        })
+    if docs:
+        try:
+            notifications_col.insert_many(docs)
+        except Exception:
+            pass
+
+    # Broadcast a lightweight route change payload to websocket watchers
+    try:
+        payload = {
+            'type': 'drop_event',
+            'ride_group_id': ride_group_id,
+            'passenger_id': current_user['id'],
+            'passenger_name': current_user.get('full_name'),
+            'driver_id': driver_id,
+            'timestamp': now,
+        }
+        # schedule background broadcast
+        import asyncio
+        asyncio.create_task(manager.broadcast_location(payload))
+    except Exception:
+        pass
+        
+    return {
+        "ride_group_id": ride_group_id,
+        "passenger_id": current_user["id"],
+        **next_status,
+    }

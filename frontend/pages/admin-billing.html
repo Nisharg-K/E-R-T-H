@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>E.R.T.H | Admin Billing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/main.css" />
+  <script defer src="../js/app.js?v=2.0"></script>
+</head>
+<body data-page="admin-billing">
+  <div class="app-shell">
+    <aside class="app-sidebar">
+      <a class="brand" href="./admin.html">
+        <span class="brand-mark">ERTH</span>
+        <span class="brand-copy"><strong>Admin</strong></span>
+      </a>
+      <nav class="nav-list">
+        <a class="nav-item" href="./admin.html">Overview</a>
+        <a class="nav-item" href="./admin-approval.html">Approval</a>
+        <a class="nav-item" href="./admin-ride.html">Ride Groups</a>
+        <a class="nav-item" href="./admin-people.html">People</a>
+        <a class="nav-item active" href="./admin-billing.html">Billing</a>
+        <a class="nav-item" href="./admin-map.html">Employee Map</a>
+        <a class="nav-item" href="./admin-ai.html">AI Query</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="sessionBadge" class="session-badge">Signed out</span>
+        <button id="logoutButton" class="ghost-button" type="button">Sign out</button>
+      </div>
+    </aside>
+
+    <main class="app-main">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Financial billing sheets</p>
+          <h1>Billing Ledger</h1>
+        </div>
+        <div class="site-actions" style="display: flex; gap: 12px; align-items: center;">
+          <button id="exportCsvBtn" class="primary-button" type="button" style="background: #28a745; border-color: #28a745; color: #fff;">📥 Export Excel (CSV)</button>
+          <button id="refreshButton" class="primary-button" type="button">Refresh data</button>
+        </div>
+      </header>
+
+      <!-- Filters Section -->
+      <section class="card" style="margin-bottom: 24px; padding: 16px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; background: rgba(255,255,255,0.02);">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="filterMonth" style="margin: 0; font-size: 0.9rem; color: var(--text);">Billing Month:</label>
+          <input type="month" id="filterMonth" style="width: auto; padding: 8px 12px; margin: 0; font-size: 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #000; color: #fff;" />
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="filterDriver" style="margin: 0; font-size: 0.9rem; color: var(--text);">Driver:</label>
+          <select id="filterDriver" style="width: auto; padding: 8px 12px; margin: 0; font-size: 0.9rem; border-radius: 6px; border: 1px solid var(--border); background: #000; color: #fff;">
+            <option value="">All Drivers</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- Overview Cards -->
+      <section class="metrics-row" style="margin-bottom: 24px;">
+        <article class="metric-card">
+          <span>Monthly Cost</span>
+          <strong id="billingTotalCost">₹0.00</strong>
+        </article>
+        <article class="metric-card">
+          <span>Total Trips</span>
+          <strong id="billingTotalTrips">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>Average Cost / Trip</span>
+          <strong id="billingAvgCost">₹0.00</strong>
+        </article>
+      </section>
+
+      <!-- Main Ledger Spreadsheet -->
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Trip detailed log</p>
+            <h3>Spreadsheet View</h3>
+          </div>
+        </div>
+        
+        <div class="table-shell" id="billingSpreadsheetContainer" style="overflow-x: auto;">
+          <p class="code-block">Loading billing records...</p>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -27,6 +27,7 @@ class RideGroupCreate(BaseModel):
     is_recurring: Optional[bool] = False
     recurrence_days: Optional[List[str]] = []   # e.g. ["mon","tue","wed","thu","fri"]
     departure_time: Optional[str] = ""           # e.g. "08:30"
+    route_type: Optional[str] = "pickup"         # "pickup" or "drop"
 
 class RideGroupUpdate(BaseModel):
     name: Optional[str] = None
@@ -40,6 +41,7 @@ class RideGroupUpdate(BaseModel):
     is_recurring: Optional[bool] = None
     recurrence_days: Optional[List[str]] = None
     departure_time: Optional[str] = None
+    route_type: Optional[str] = None
 
 class PassengerStatusUpdate(BaseModel):
     status: str
@@ -92,14 +94,15 @@ def resolve_group_details(group: dict) -> dict:
         if passenger:
             resolved_passengers.append({
                 "id": passenger["id"],
-                "full_name": passenger["full_name"],
-                "email": passenger["email"],
+                "full_name": passenger.get("full_name", "Employee"),
+                "email": passenger.get("email"),
                 "mobile_number": passenger.get("mobile_number"),
                 "pickup_point": passenger.get("pickup_point"),
                 "trip_status": passenger_statuses.get(pid, default_passenger_status())
             })
     resolved["passengers"] = resolved_passengers
     resolved["passenger_statuses"] = passenger_statuses
+    resolved["route_type"] = group.get("route_type") or "pickup"
     return resolved
 
 # --- Endpoints ---
@@ -174,6 +177,7 @@ def create_ride_group(payload: RideGroupCreate, current_user: dict = Depends(get
         "is_recurring": payload.is_recurring or False,
         "recurrence_days": payload.recurrence_days or [],
         "departure_time": payload.departure_time or "",
+        "route_type": payload.route_type or "pickup",
         "created_at": get_now().isoformat()
     }
     
@@ -193,7 +197,8 @@ def update_ride_group(group_id: str, payload: RideGroupUpdate, current_user: dic
         # Drivers cannot update other fields
         if (payload.name is not None or payload.driver_id is not None or 
             payload.passenger_ids is not None or payload.pickup_order is not None or 
-            payload.drop_order is not None or payload.total_cost is not None):
+            payload.drop_order is not None or payload.total_cost is not None or
+            payload.route_type is not None):
             raise HTTPException(status_code=403, detail="Drivers can only update status and delay_minutes")
     elif current_user["role"] not in ("supervisor", "admin"):
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -229,6 +234,8 @@ def update_ride_group(group_id: str, payload: RideGroupUpdate, current_user: dic
         update_data["recurrence_days"] = payload.recurrence_days
     if payload.departure_time is not None:
         update_data["departure_time"] = payload.departure_time
+    if payload.route_type is not None:
+        update_data["route_type"] = payload.route_type
         
     if update_data:
         ride_groups_col.update_one({"id": group_id}, {"$set": update_data})
@@ -314,13 +321,17 @@ def relist_ride_group(group_id: str, current_user: dict = Depends(get_current_us
     for pid in passenger_ids:
         reset_statuses[pid] = default_passenger_status()
         
+    current_type = existing.get("route_type", "pickup")
+    next_type = "drop" if current_type == "pickup" else "pickup"
+        
     ride_groups_col.update_one(
         {"id": group_id},
         {
             "$set": {
                 "status": "draft",
                 "passenger_statuses": reset_statuses,
-                "delay_minutes": 0
+                "delay_minutes": 0,
+                "route_type": next_type
             }
         }
     )

@@ -99,7 +99,7 @@ function redirectForRole(role) {
 }
 
 function isAdminPage() {
-  return currentPage === "admin" || currentPage === "admin-approval" || currentPage === "admin-ride" || currentPage === "admin-people" || currentPage === "admin-map" || currentPage === "admin-ai";
+  return currentPage === "admin" || currentPage === "admin-approval" || currentPage === "admin-ride" || currentPage === "admin-people" || currentPage === "admin-billing" || currentPage === "admin-map" || currentPage === "admin-ai";
 }
 
 function updateSessionBadge() {
@@ -276,49 +276,56 @@ function updateMap(markers) {
         })
       })
       .addTo(state.map)
-      .bindPopup(`<strong>Your Location</strong>`);
-      state.markers.push(driverMarker);
     }
 
     if (isRideOn) {
+      const isDrop = ride.route_type === "drop";
       const pathCoords = [];
+      const officeCoord = [22.32414, 73.16594];
+
       if (state.driverLatLng) {
         pathCoords.push(state.driverLatLng);
       }
 
-      // Build ordered waypoint list from pickup_order (must include lat/lng)
-      const pickups = (ride.pickup_order || []).filter(p => p.latitude && p.longitude).map(p => ({ user_id: p.user_id, latlng: [p.latitude, p.longitude], full_name: p.full_name }));
+      // Build ordered waypoint list from stops
+      const stops = (isDrop ? (ride.drop_order || []) : (ride.pickup_order || []))
+        .filter(p => p.latitude && p.longitude)
+        .map(p => ({ user_id: p.user_id, latlng: [p.latitude, p.longitude], full_name: p.full_name }));
 
-      // Office destination
-      const officeCoord = [22.32414, 73.16594];
+      if (isDrop) {
+        pathCoords.push(officeCoord);
+      }
+      stops.forEach(p => pathCoords.push(p.latlng));
+      if (!isDrop) {
+        pathCoords.push(officeCoord);
+      }
 
-      // Add passenger waypoints to pathCoords
-      pickups.forEach(p => pathCoords.push(p.latlng));
-      // Finally add office
-      pathCoords.push(officeCoord);
-
-      // Draw per-segment polylines to show progression: completed / active / upcoming
-      // Determine boarded state per passenger
-      const passengerBoarded = (userId) => {
+      // Determine completed state per passenger based on route direction
+      const isStopCompleted = (userId) => {
         const statuses = ride.passengers || [];
         const found = statuses.find(s => (s.id === userId || s.passenger_user_id === userId || s.user_id === userId));
-        return !!(found && found.trip_status && found.trip_status.boarded);
+        if (!found || !found.trip_status) return false;
+        return isDrop 
+          ? (found.trip_status.status === "dropped" || !!found.trip_status.dropped_at) 
+          : (found.trip_status.boarded || found.trip_status.status === "picked_up" || !!found.trip_status.picked_up_at);
       };
 
-      // Find index of first not-boarded passenger -> active pickup index
-      let activeIndex = pickups.findIndex(p => !passengerBoarded(p.user_id));
-      if (activeIndex === -1) activeIndex = pickups.length; // no active pickups, next is office
+      // Find index of first not-completed passenger
+      let activeIndex = stops.findIndex(p => !isStopCompleted(p.user_id));
+      if (activeIndex === -1) activeIndex = stops.length; // no active stops, next is office or end
 
-      // Leg sequence starting from current active index: Driver -> next stop -> office
+      // Leg sequence starting from current active index
       const legs = [];
-      const origin = state.driverLatLng || (pickups.length ? pickups[0].latlng : null);
+      const origin = state.driverLatLng || (isDrop ? officeCoord : (stops.length ? stops[0].latlng : null));
       if (origin) {
         let prev = origin;
-        for (let i = activeIndex; i < pickups.length; i++) {
-          legs.push({ from: prev, to: pickups[i].latlng, passenger: pickups[i], index: i });
-          prev = pickups[i].latlng;
+        for (let i = activeIndex; i < stops.length; i++) {
+          legs.push({ from: prev, to: stops[i].latlng, passenger: stops[i], index: i });
+          prev = stops[i].latlng;
         }
-        legs.push({ from: prev, to: officeCoord, passenger: null, index: pickups.length });
+        if (!isDrop) {
+          legs.push({ from: prev, to: officeCoord, passenger: null, index: stops.length });
+        }
       }
 
       // Draw active leg in blue and upcoming legs as lighter blue; skip completed legs
@@ -333,21 +340,21 @@ function updateMap(markers) {
         }
       });
 
-      // If all pickups are boarded and ride is completed, draw the full route and keep it yellow
-      if (activeIndex >= pickups.length && ride.status === 'completed') {
+      // If all stops completed, draw fallback full path
+      if (activeIndex >= stops.length && ride.status === 'completed') {
         if (state.driverLatLng && pathCoords.length >= 2) {
           drawRoadRoute(pathCoords, routeRequestId).catch(() => {});
         }
       }
       
-      // Place passenger markers only for not-boarded passengers (skip green ticks for boarded)
-      pickups.forEach((p, idx) => {
-        const boarded = passengerBoarded(p.user_id);
-        if (boarded) return; // do not render a green tick marker for boarded passengers
+      // Place passenger markers only for not-completed passengers
+      stops.forEach((p, idx) => {
+        const completed = isStopCompleted(p.user_id);
+        if (completed) return;
         const pinHtml = `<div style="background-color:#ffcc00;color:#000;width:18px;height:18px;border-radius:9px;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:bold;">${idx + 1}</div>`;
         const marker = L.marker(p.latlng, {
           icon: L.divIcon({ className: 'pickup-marker', html: pinHtml, iconSize: [22,22], iconAnchor: [11,11] }),
-        }).addTo(state.map).bindPopup(`<strong>${escapeHtml(p.full_name || 'Passenger')}</strong><br>Not Boarded`);
+        }).addTo(state.map).bindPopup(`<strong>${escapeHtml(p.full_name || 'Passenger')}</strong><br>${isDrop ? 'Not Dropped' : 'Not Boarded'}`);
         state.routeLayers.push(marker);
       });
 
@@ -361,11 +368,9 @@ function updateMap(markers) {
         })
       })
       .addTo(state.map)
-      .bindPopup(`<strong>Aditi Vadodara Office</strong><br>Destination`);
+      .bindPopup(`<strong>Aditi Vadodara Office</strong><br>${isDrop ? 'Origin' : 'Destination'}`);
 
       state.routeLayers.push(officeMarker);
-
-      // Draw only per-leg active route; do not draw the full snapped base route
     }
   }
 
@@ -424,25 +429,36 @@ function updateMap(markers) {
         }
         // Draw route and passenger markers for employee to visualize progress
         try {
-          const pickups = (ride.pickup_order || []).filter(p => p.latitude && p.longitude).map(p => ({ user_id: p.user_id, latlng: [p.latitude, p.longitude], full_name: p.full_name }));
+          const isDrop = ride.route_type === "drop";
           const officeCoord = [22.32414, 73.16594];
-          const origin = activeDriver ? [activeDriver.latitude, activeDriver.longitude] : (state.driverLatLng || (pickups.length ? pickups[0].latlng : null));
-          const passengerBoarded = (userId) => {
+          const stops = (isDrop ? (ride.drop_order || []) : (ride.pickup_order || []))
+            .filter(p => p.latitude && p.longitude)
+            .map(p => ({ user_id: p.user_id, latlng: [p.latitude, p.longitude], full_name: p.full_name }));
+          const origin = activeDriver ? [activeDriver.latitude, activeDriver.longitude] : (state.driverLatLng || (isDrop ? officeCoord : (stops.length ? stops[0].latlng : null)));
+
+          const isStopCompleted = (userId) => {
             const statuses = ride.passengers || [];
             const found = statuses.find(s => (s.id === userId || s.passenger_user_id === userId || s.user_id === userId));
-            return !!(found && found.trip_status && found.trip_status.boarded);
+            if (!found || !found.trip_status) return false;
+            return isDrop 
+              ? (found.trip_status.status === "dropped" || !!found.trip_status.dropped_at) 
+              : (found.trip_status.boarded || found.trip_status.status === "picked_up" || !!found.trip_status.picked_up_at);
           };
-          let activeIndex = pickups.findIndex(p => !passengerBoarded(p.user_id));
-          if (activeIndex === -1) activeIndex = pickups.length;
+
+          let activeIndex = stops.findIndex(p => !isStopCompleted(p.user_id));
+          if (activeIndex === -1) activeIndex = stops.length;
+
           // construct legs starting from current active index
           const legs = [];
           if (origin) {
             let prev = origin;
-            for (let i = activeIndex; i < pickups.length; i++) {
-              legs.push({ from: prev, to: pickups[i].latlng, index: i });
-              prev = pickups[i].latlng;
+            for (let i = activeIndex; i < stops.length; i++) {
+              legs.push({ from: prev, to: stops[i].latlng, index: i });
+              prev = stops[i].latlng;
             }
-            legs.push({ from: prev, to: officeCoord, index: pickups.length });
+            if (!isDrop) {
+              legs.push({ from: prev, to: officeCoord, index: stops.length });
+            }
           }
           // Draw active leg in blue and upcoming legs as lighter blue; skip completed legs
           legs.forEach((leg) => {
@@ -453,21 +469,21 @@ function updateMap(markers) {
               drawRoadRouteSegment(leg.from, leg.to, { color: '#0078FF', weight: 4, opacity: 0.38 }, routeRequestId).catch(() => {});
             }
           });
-          // If employee's ride reached completion, draw the full route and keep it yellow
-          if (activeIndex >= pickups.length && ride.status === 'completed') {
+          // If employee's ride reached completion, draw the full route
+          if (activeIndex >= stops.length && ride.status === 'completed') {
             if (origin && pathCoords && pathCoords.length >= 2) {
               drawRoadRoute(pathCoords, routeRequestId).catch(() => {});
             }
           }
-          // Render markers only for not-boarded passengers
-          pickups.forEach((p, idx) => {
-            const boarded = passengerBoarded(p.user_id);
-            if (boarded) return;
-            const pinHtml = `<div style="background-color:#ffcc00;color:#000;width:18px;height:18px;border-radius:9px;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-size:0.7rem;">●</div>`;
-            const marker = L.marker(p.latlng, { icon: L.divIcon({ className: 'pickup-marker', html: pinHtml, iconSize: [22,22], iconAnchor: [11,11] }) }).addTo(state.map).bindPopup(`<strong>${escapeHtml(p.full_name || 'Passenger')}</strong><br>Not Boarded`);
+          // Render markers only for not-completed passengers
+          stops.forEach((p, idx) => {
+            const completed = isStopCompleted(p.user_id);
+            if (completed) return;
+            const pinHtml = `<div style="background-color:#ffcc00;color:#000;width:18px;height:18px;border-radius:9px;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:bold;">${idx + 1}</div>`;
+            const marker = L.marker(p.latlng, { icon: L.divIcon({ className: 'pickup-marker', html: pinHtml, iconSize: [22,22], iconAnchor: [11,11] }) }).addTo(state.map).bindPopup(`<strong>${escapeHtml(p.full_name || 'Passenger')}</strong><br>${isDrop ? 'Not Dropped' : 'Not Boarded'}`);
             state.routeLayers.push(marker);
           });
-          const officeMarker = L.marker(officeCoord, { icon: L.divIcon({ className: 'office-marker-icon', html: `<div style="background-color: #ff3366; color: white; width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 1.1rem;">🏢</div>`, iconSize: [28,28], iconAnchor: [14,14] }) }).addTo(state.map).bindPopup(`<strong>Aditi Vadodara Office</strong><br>Destination`);
+          const officeMarker = L.marker(officeCoord, { icon: L.divIcon({ className: 'office-marker-icon', html: `<div style="background-color: #ff3366; color: white; width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 1.1rem;">🏢</div>`, iconSize: [28,28], iconAnchor: [14,14] }) }).addTo(state.map).bindPopup(`<strong>Aditi Vadodara Office</strong><br>${isDrop ? 'Origin' : 'Destination'}`);
           state.routeLayers.push(officeMarker);
         } catch (e) {}
       }
@@ -1469,8 +1485,9 @@ function renderCurrentRide(containerId, ride, label) {
     return { id, full_name, trip_status: p.trip_status || {} };
   });
   if (!passengers.length) {
-    // Fallback to pickup_order when passengers array is empty
-    (ride.pickup_order || []).forEach(p => passengers.push({ id: p.user_id, full_name: p.full_name || "Passenger", trip_status: p.trip_status || {} }));
+    const isDrop = ride.route_type === "drop";
+    const orderList = isDrop ? (ride.drop_order || []) : (ride.pickup_order || []);
+    orderList.forEach(p => passengers.push({ id: p.user_id, full_name: p.full_name || "Passenger", trip_status: p.trip_status || {} }));
   }
 
   if (state.currentUser?.role === "driver") {
@@ -1487,24 +1504,34 @@ function renderCurrentRide(containerId, ride, label) {
         </div>
       `;
     };
-    // Both arrays come from the backend's date-specific route projection.
-    // No client-side availability filtering is performed here.
-    sequenceHtml = renderLeg("Pickup route", ride.pickup_order, "", "Aditi Vadodara Office") +
-      renderLeg("Drop route", ride.drop_order, "Aditi Vadodara Office", "");
+    if (ride.route_type === "drop") {
+      sequenceHtml = renderLeg("Drop route", ride.drop_order, "Aditi Vadodara Office", "");
+    } else {
+      sequenceHtml = renderLeg("Pickup route", ride.pickup_order, "", "Aditi Vadodara Office");
+    }
   } else if (passengers.length) {
       const listItems = passengers.map((p) => {
       const isMe = state.currentUser && state.currentUser.id === p.id;
-      const boarded = p.trip_status?.boarded;
-      const boardedAt = p.trip_status?.boarded_at;
-      const timeText = boardedAt ? ` at ${new Date(boardedAt).toLocaleTimeString()}` : "";
-      const statusText = boarded ? `Boarded${timeText}` : "Not Boarded";
-      const boardButton = (isMe && !boarded && (ride.status === "started" || ride.status === "ongoing"))
-        ? `<button type="button" class="primary-button" data-board-ride="${ride.id}" data-board-passenger="${escapeHtml(p.id)}" style="width: fit-content; padding: 7px 12px; font-size: 0.82rem;">I've Boarded the Cab</button>`
+      const isDrop = ride.route_type === "drop";
+      const completed = isDrop 
+        ? (p.trip_status?.status === "dropped" || !!p.trip_status?.dropped_at)
+        : (p.trip_status?.boarded);
+      const timeText = isDrop 
+        ? (p.trip_status?.dropped_at ? ` at ${new Date(p.trip_status.dropped_at).toLocaleTimeString()}` : "")
+        : (p.trip_status?.boarded_at ? ` at ${new Date(p.trip_status.boarded_at).toLocaleTimeString()}` : "");
+      const statusText = completed
+        ? (isDrop ? `Reached Home${timeText}` : `Boarded${timeText}`)
+        : (isDrop ? "In Transit" : "Not Boarded");
+
+      const actionButton = (isMe && !completed && (ride.status === "started" || ride.status === "ongoing"))
+        ? (isDrop 
+          ? `<button type="button" class="primary-button" data-reach-home-ride="${ride.id}" style="width: fit-content; padding: 7px 12px; font-size: 0.82rem; background: #059669; border-color: #059669;">I've Reached Home</button>`
+          : `<button type="button" class="primary-button" data-board-ride="${ride.id}" data-board-passenger="${escapeHtml(p.id)}" style="width: fit-content; padding: 7px 12px; font-size: 0.82rem;">I've Boarded the Cab</button>`)
         : "";
       return `
         <li style="margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
           <span>${isMe ? `<strong>${escapeHtml(p.full_name)} (You)</strong>` : escapeHtml(p.full_name)}<br><small style="color:var(--muted);">${statusText}</small></span>
-          ${boardButton}
+          ${actionButton}
         </li>
       `;
     }).join("");
@@ -1658,6 +1685,13 @@ async function loadAdminPage() {
   byId("metricDrivers").textContent = stats.total_drivers ?? 0;
   byId("metricActiveRides").textContent = stats.active_rides ?? 0;
   byId("metricDelay").textContent = stats.delayed_trips ?? 0;
+
+  if (byId("metricMonthlyCost")) {
+    byId("metricMonthlyCost").textContent = `₹${Number(stats.total_monthly_cost || 0).toFixed(2)}`;
+  }
+  if (byId("metricMonthlyTrips")) {
+    byId("metricMonthlyTrips").textContent = stats.total_completed_trips ?? 0;
+  }
 
   ensureNotificationDrawer();
   updateNotificationState(notifications || []);
@@ -2098,18 +2132,31 @@ function renderRidesCardsList(containerId, rides) {
     // Show compact passenger list with boarding state. Pickup/Drop sequence removed.
     let sequenceHtml = "";
     // Normalize passenger entries similar to renderCurrentRide: prefer resolved passenger ids and names
-    const pickupNameMap = (ride.pickup_order || []).reduce((acc, p) => { if (p.user_id) acc[p.user_id] = p.full_name || acc[p.user_id] || "Passenger"; return acc; }, {});
-    const passengers = (ride.passengers || []).map(p => ({ id: p.id || p.user_id || p.passenger_user_id, full_name: p.full_name || pickupNameMap[p.user_id || p.passenger_user_id] || "Passenger", trip_status: p.trip_status || {} }));
+    const isDrop = ride.route_type === "drop";
+    const orderList = isDrop ? (ride.drop_order || []) : (ride.pickup_order || []);
+    const nameMap = orderList.reduce((acc, p) => { if (p.user_id) acc[p.user_id] = p.full_name || acc[p.user_id] || "Passenger"; return acc; }, {});
+    const passengers = (ride.passengers || []).map(p => ({ id: p.id || p.user_id || p.passenger_user_id, full_name: p.full_name || nameMap[p.user_id || p.passenger_user_id] || "Passenger", trip_status: p.trip_status || {} }));
     if (!passengers.length) {
-      (ride.pickup_order || []).forEach(p => passengers.push({ id: p.user_id, full_name: p.full_name || "Passenger", trip_status: p.trip_status || {} }));
+      orderList.forEach(p => passengers.push({ id: p.user_id, full_name: p.full_name || "Passenger", trip_status: p.trip_status || {} }));
     }
     if (passengers.length) {
-      const listItems = passengers.map(p => `
-        <li style="margin-bottom: 4px;">
-          ${state.currentUser && state.currentUser.id === (p.id || p.user_id) ? `<strong>${escapeHtml(p.full_name)} (You)</strong>` : escapeHtml(p.full_name)}<br>
-          <small style="color: var(--muted);">${p.trip_status?.boarded ? `Boarded${p.trip_status.boarded_at ? ` at ${new Date(p.trip_status.boarded_at).toLocaleTimeString()}` : ''}` : 'Not Boarded'}</small>
-        </li>
-      `).join("");
+      const listItems = passengers.map(p => {
+        const completed = isDrop 
+          ? (p.trip_status?.status === "dropped" || !!p.trip_status?.dropped_at)
+          : (p.trip_status?.boarded);
+        const timeText = isDrop 
+          ? (p.trip_status?.dropped_at ? ` at ${new Date(p.trip_status.dropped_at).toLocaleTimeString()}` : "")
+          : (p.trip_status?.boarded_at ? ` at ${new Date(p.trip_status.boarded_at).toLocaleTimeString()}` : "");
+        const statusLabelText = completed
+          ? (isDrop ? `Reached Home${timeText}` : `Boarded${timeText}`)
+          : (isDrop ? "In Transit" : "Not Boarded");
+        return `
+          <li style="margin-bottom: 4px;">
+            ${state.currentUser && state.currentUser.id === (p.id || p.user_id) ? `<strong>${escapeHtml(p.full_name)} (You)</strong>` : escapeHtml(p.full_name)}<br>
+            <small style="color: var(--muted);">${statusLabelText}</small>
+          </li>
+        `;
+      }).join("");
       sequenceHtml += `
         <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
           <strong style="font-size: 0.85rem; color: var(--muted);">Passengers</strong>
@@ -2124,9 +2171,15 @@ function renderRidesCardsList(containerId, rides) {
     if (state.currentUser && Array.isArray(ride.passengers)) {
       const me = ride.passengers.find(p => (p.id === state.currentUser.id || p.passenger_user_id === state.currentUser.id));
       if (me) {
-        const boarded = !!(me.trip_status && me.trip_status.boarded);
-        const boardedAt = me.trip_status && me.trip_status.boarded_at;
-        boardingStatusLabel = boarded ? `Boarded${boardedAt ? ` at ${new Date(boardedAt).toLocaleTimeString()}` : ''}` : 'Not Boarded';
+        const completed = isDrop
+          ? (me.trip_status?.status === "dropped" || !!me.trip_status?.dropped_at)
+          : (me.trip_status?.boarded);
+        const timeText = isDrop
+          ? (me.trip_status?.dropped_at ? ` at ${new Date(me.trip_status.dropped_at).toLocaleTimeString()}` : "")
+          : (me.trip_status?.boarded_at ? ` at ${new Date(me.trip_status.boarded_at).toLocaleTimeString()}` : "");
+        boardingStatusLabel = completed
+          ? (isDrop ? `Reached Home${timeText}` : `Boarded${timeText}`)
+          : (isDrop ? "In Transit" : "Not Boarded");
       }
     }
 
@@ -2258,6 +2311,7 @@ async function loadRoleRidePage(filterFn) {
       const delayId = e.target.dataset.delayRide;
       const delayVal = e.target.dataset.delayVal;
       const boardRideId = e.target.dataset.boardRide;
+      const reachHomeRideId = e.target.dataset.reachHomeRide;
 
       if (boardRideId) {
         const boardBtn = e.target;
@@ -2271,6 +2325,19 @@ async function loadRoleRidePage(filterFn) {
           boardBtn.disabled = false;
           boardBtn.textContent = prevText || "I've Boarded the Cab";
           alert(`Failed to mark boarded: ${normalizeErrorMessage(parseApiError(err))}`);
+        }
+      } else if (reachHomeRideId) {
+        const reachBtn = e.target;
+        reachBtn.disabled = true;
+        const prevText = reachBtn.textContent;
+        reachBtn.textContent = "Updating...";
+        try {
+          await api(`/api/v1/calendar/rides/${reachHomeRideId}/reach-home`, { method: "POST" });
+          await loadRoleRidePage(filterFn);
+        } catch (err) {
+          reachBtn.disabled = false;
+          reachBtn.textContent = prevText || "I've Reached Home";
+          alert(`Failed to mark reached home: ${normalizeErrorMessage(parseApiError(err))}`);
         }
       } else if (startId) {
         await api(`/api/v1/ride-groups/${startId}`, {
@@ -2383,6 +2450,156 @@ async function loadAdminMapPage() {
   initAllEmployeesMap();
 }
 
+let billingRecords = [];
+
+async function loadAdminBillingPage() {
+  await loadCurrentUser();
+  initDashboardDate();
+
+  const filterMonth = byId("filterMonth");
+  const filterDriver = byId("filterDriver");
+  const exportBtn = byId("exportCsvBtn");
+
+  if (filterMonth && !filterMonth.value) {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    filterMonth.value = `${yyyy}-${mm}`;
+  }
+
+  const selectedMonth = filterMonth ? filterMonth.value : "";
+  const selectedDriver = filterDriver ? filterDriver.value : "";
+
+  try {
+    const data = await api(`/api/v1/analytics/billing?month=${selectedMonth}&driver_id=${selectedDriver}`);
+    billingRecords = data.records || [];
+
+    // Populate driver options if empty (except the default "All Drivers")
+    if (filterDriver && filterDriver.options.length <= 1) {
+      (data.drivers || []).forEach(d => {
+        const opt = document.createElement("option");
+        opt.value = d.id;
+        opt.textContent = d.full_name;
+        filterDriver.appendChild(opt);
+      });
+    }
+
+    // Populate Overview Cards
+    if (byId("billingTotalCost")) {
+      byId("billingTotalCost").textContent = `₹${Number(data.total_cost_sum || 0).toFixed(2)}`;
+    }
+    if (byId("billingTotalTrips")) {
+      byId("billingTotalTrips").textContent = data.total_trips_count || 0;
+    }
+    if (byId("billingAvgCost")) {
+      byId("billingAvgCost").textContent = `₹${Number(data.average_trip_cost || 0).toFixed(2)}`;
+    }
+
+    // Render Spreadsheet Table
+    const tableContainer = byId("billingSpreadsheetContainer");
+    if (tableContainer) {
+      if (billingRecords.length === 0) {
+        tableContainer.innerHTML = '<p class="code-block">No billing records found for this criteria.</p>';
+      } else {
+        const rows = billingRecords.map(r => `
+          <tr>
+            <td>${escapeHtml(r.ride_date)}</td>
+            <td><code style="font-size: 0.8rem; background: rgba(255,255,255,0.05); padding: 2px 4px; border-radius: 4px;">${escapeHtml(r.ride_reference)}</code></td>
+            <td><strong>${escapeHtml(r.name)}</strong></td>
+            <td>${escapeHtml(r.driver_name)}</td>
+            <td>${escapeHtml(r.cab_number)}</td>
+            <td><span class="tag">${escapeHtml(r.route_type.toUpperCase())}</span></td>
+            <td style="max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(r.passengers_names)}">${escapeHtml(r.passengers_names)}</td>
+            <td>₹${Number(r.total_cost).toFixed(2)}</td>
+          </tr>
+        `).join("");
+
+        tableContainer.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Reference</th>
+                <th>Group Name</th>
+                <th>Driver Name</th>
+                <th>Cab Number</th>
+                <th>Type</th>
+                <th>Passengers</th>
+                <th>Trip Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+              <tr style="background: rgba(255, 222, 0, 0.08); font-weight: 700; border-top: 2px solid var(--border);">
+                <td colspan="7" style="text-align: right; text-transform: uppercase; font-size: 0.85rem; color: var(--muted); letter-spacing: 0.05em;">Total Billing Sum:</td>
+                <td style="color: var(--accent); font-size: 1.05rem;">₹${Number(data.total_cost_sum || 0).toFixed(2)}</td>
+              </tr>
+            </tbody>
+          </table>
+        `;
+      }
+    }
+
+  } catch (err) {
+    console.error("Failed to load billing ledger data", err);
+    const tableContainer = byId("billingSpreadsheetContainer");
+    if (tableContainer) {
+      tableContainer.innerHTML = '<p class="code-block" style="color: var(--danger);">Error loading financials ledger.</p>';
+    }
+  }
+
+  // Bind change listeners if not already done
+  if (filterMonth && !filterMonth.dataset.bound) {
+    filterMonth.dataset.bound = "true";
+    filterMonth.addEventListener("change", () => loadAdminBillingPage());
+  }
+  if (filterDriver && !filterDriver.dataset.bound) {
+    filterDriver.dataset.bound = "true";
+    filterDriver.addEventListener("change", () => loadAdminBillingPage());
+  }
+
+  // Bind export button listener
+  if (exportBtn && !exportBtn.dataset.bound) {
+    exportBtn.dataset.bound = "true";
+    exportBtn.addEventListener("click", () => {
+      if (billingRecords.length === 0) {
+        alert("No records available to export.");
+        return;
+      }
+      
+      const monthLabel = filterMonth ? filterMonth.value : "all_time";
+      const headers = ["Date", "Ride Reference", "Group Name", "Driver", "Cab Number", "Route Type", "Passengers", "Cost (INR)"];
+      const csvRows = [headers.join(",")];
+      
+      for (const r of billingRecords) {
+        const values = [
+          r.ride_date,
+          r.ride_reference,
+          `"${r.name.replace(/"/g, '""')}"`,
+          `"${r.driver_name.replace(/"/g, '""')}"`,
+          r.cab_number,
+          r.route_type,
+          `"${r.passengers_names.replace(/"/g, '""')}"`,
+          r.total_cost
+        ];
+        csvRows.push(values.join(","));
+      }
+      
+      const totalSum = billingRecords.reduce((acc, r) => acc + r.total_cost, 0);
+      csvRows.push(`,,,,,,,Total Sum:,${totalSum.toFixed(2)}`);
+      
+      const csvContent = "data:text/csv;charset=utf-8," + csvRows.join("\n");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `billing_report_${monthLabel}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+  }
+}
+
 const supervisorState = {
   pickupOrder: [],
   dropOrder: [],
@@ -2467,15 +2684,18 @@ function renderGroupsTable(groups) {
     const recurringBadge = group.is_recurring
       ? `<span class="tag" style="background:#7c3aed22;color:#7c3aed;border:1px solid #7c3aed55;margin-left:6px;">🔁 ${(group.recurrence_days || []).join(",").toUpperCase() || "recurring"}</span>`
       : "";
+    const isDropRoute = group.route_type === "drop";
+    const btnLabel = isDropRoute ? "List Pickup Route" : "List Drop Route";
     const postBtn = status === "draft" ? 
       `<button class="primary-button" data-post-group="${group.id}" style="padding: 6px 12px; font-size: 0.85rem; margin-right: 6px; background: #007bff; border-color: #007bff;">Post Ride</button>` : "";
     const relistBtn = status === "completed" ? 
-      `<button class="primary-button" data-relist-group="${group.id}" style="padding: 6px 12px; font-size: 0.85rem; margin-right: 6px; background: #28a745; border-color: #28a745;">Relist</button>` : "";
+      `<button class="primary-button" data-relist-group="${group.id}" style="padding: 6px 12px; font-size: 0.85rem; margin-right: 6px; background: #28a745; border-color: #28a745;">${btnLabel}</button>` : "";
     return `
       <tr>
         <td><strong>${group.name}</strong>${recurringBadge}</td>
         <td>${group.driver_name} (${group.cab_number})</td>
         <td>${passengersNames}</td>
+        <td>₹${(group.total_cost !== undefined ? group.total_cost : 150.00).toFixed(2)}</td>
         <td><span class="tag ${status === "ongoing" || status === "started" ? "success" : ""}">${status}</span></td>
         <td>
           ${postBtn}
@@ -2494,6 +2714,7 @@ function renderGroupsTable(groups) {
           <th>Group Name</th>
           <th>Driver & Cab</th>
           <th>Passengers</th>
+          <th>Cost</th>
           <th>Status</th>
           <th>Actions</th>
         </tr>
@@ -2537,6 +2758,9 @@ function startEditGroup(groupId) {
   if (byId("departureTime")) {
     byId("departureTime").value = group.departure_time || "";
   }
+  if (byId("groupCost")) {
+    byId("groupCost").value = group.total_cost !== undefined ? group.total_cost : 150.00;
+  }
   
   supervisorState.pickupOrder = group.pickup_order ? group.pickup_order.sort((a,b) => a.order - b.order).map(o => o.user_id) : [...group.passenger_ids];
   supervisorState.dropOrder = group.drop_order ? group.drop_order.sort((a,b) => a.order - b.order).map(o => o.user_id) : [...group.passenger_ids];
@@ -2551,6 +2775,9 @@ function resetSupervisorForm() {
   
   byId("groupId").value = "";
   byId("groupForm")?.reset();
+  if (byId("groupCost")) {
+    byId("groupCost").value = "150.00";
+  }
   
   const recurringFields = byId("recurringFields");
   if (recurringFields) {
@@ -2601,6 +2828,7 @@ function setupSupervisorForms() {
       ? [...document.querySelectorAll("input[name='recurrence_days']:checked")].map(cb => cb.value)
       : [];
     const departureTime = isRecurring ? (byId("departureTime")?.value || "") : "";
+    const totalCost = parseFloat(byId("groupCost")?.value) || 150.00;
 
     const payload = {
       name,
@@ -2611,6 +2839,7 @@ function setupSupervisorForms() {
       is_recurring: isRecurring,
       recurrence_days: recurrenceDays,
       departure_time: departureTime,
+      total_cost: totalCost
     };
     
     try {
@@ -3076,6 +3305,11 @@ window.addEventListener("DOMContentLoaded", () => {
 
   if (currentPage === "admin-map") {
     initProtectedPage(loadAdminMapPage, "admin");
+    return;
+  }
+
+  if (currentPage === "admin-billing") {
+    initProtectedPage(loadAdminBillingPage, "admin");
     return;
   }
 
