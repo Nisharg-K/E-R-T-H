@@ -78,10 +78,15 @@ def get_billing_ledger(
         month = today.strftime("%Y-%m")
 
     # Find matching completed ride groups
-    query = {
-        "status": "completed",
-        "ride_date": {"$regex": f"^{month}"}
+    # Use $or to also include rides where ride_date is null/missing (legacy records)
+    date_filter = {
+        "$or": [
+            {"ride_date": {"$regex": f"^{month}"}},
+            {"ride_date": None},
+            {"ride_date": {"$exists": False}}
+        ]
     }
+    query = {"status": "completed", **date_filter}
     if driver_id:
         query["driver_id"] = driver_id
 
@@ -113,7 +118,7 @@ def get_billing_ledger(
         
         resolved_records.append({
             "id": r.get("id"),
-            "ride_date": r.get("ride_date", ""),
+            "ride_date": r.get("ride_date") or "(no date)",
             "ride_reference": r.get("ride_reference", r.get("id")),
             "name": r.get("name", "Unnamed Route"),
             "driver_name": d_name,
