@@ -60,6 +60,30 @@ def extract_response_text(response):
     return "".join(pieces).strip()
 
 
+def stream_response_text(stream):
+    pieces = []
+    print("Assistant: ", end="", flush=True)
+
+    for chunk in stream:
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            continue
+
+        delta = getattr(choices[0], "delta", None)
+        if not delta:
+            continue
+
+        content = getattr(delta, "content", None)
+        if not content:
+            continue
+
+        print(content, end="", flush=True)
+        pieces.append(content)
+
+    print("\n")
+    return "".join(pieces).strip()
+
+
 def print_api_error(exc, base_url):
     status_code = getattr(exc, "status_code", None)
     if status_code == 401:
@@ -127,16 +151,14 @@ def run_chat():
                     }
                 }
 
-            response = client.chat.completions.create(**request_args)
+            response = client.chat.completions.create(stream=True, **request_args)
         except Exception as exc:
             print_api_error(exc, base_url)
             break
 
-        assistant_text = extract_response_text(response)
+        assistant_text = stream_response_text(response)
         if not assistant_text:
             assistant_text = "(no response received)"
-
-        print(f"Assistant: {assistant_text}\n")
         messages.append({"role": "assistant", "content": assistant_text})
 
 

@@ -2423,11 +2423,206 @@ async function loadAdminPeoplePage(page = 1) {
   renderPagination("peoplePagination", page, totalPages, (p) => loadAdminPeoplePage(p));
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// RAG AI Chat
+// ═══════════════════════════════════════════════════════════════════════════
+let aiChatHistory = [];
+
+const QUICK_QUESTIONS = [
+  "What is the total billing for June 2026?",
+  "How many trips were completed in May 2026?",
+  "How many approved employees are there?",
+  "Show me pending approval requests",
+  "Who rode with me on 2026-06-15?",
+  "How many trips did each driver complete in July?",
+];
+
+function renderAiMessage(role, content, isStreaming = false) {
+  const thread = byId("aiChat");
+  if (!thread) return null;
+
+  const div = document.createElement("div");
+  div.className = `ai-msg ai-msg-${role}`;
+  div.innerHTML = `
+    <div class="ai-msg-avatar">${role === "user" ? "👤" : "🤖"}</div>
+    <div class="ai-msg-bubble">
+      <div class="ai-msg-text">${isStreaming ? '<span class="ai-typing-cursor">▍</span>' : formatAiText(content)}</div>
+    </div>
+  `;
+  thread.appendChild(div);
+  thread.scrollTop = thread.scrollHeight;
+  return div;
+}
+
+function formatAiText(text) {
+  if (!text) return "";
+  return text
+    // Bold: **text**
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    // INR symbol passthrough
+    .replace(/INR\s*([\d,]+\.?\d*)/g, "₹$1")
+    // Bullet points
+    .replace(/^[ \t]*[-•]\s+(.+)$/gm, "<li>$1</li>")
+    .replace(/((<li>.*<\/li>\n?)+)/g, "<ul>$1</ul>")
+    // Headers (===text===)
+    .replace(/===(.+?)===/g, "<strong style='color:var(--accent);'>$1</strong>")
+    // Line breaks
+    .replace(/\n/g, "<br>");
+}
+
 async function loadAdminAiPage() {
   await loadCurrentUser();
   initDashboardDate();
-  renderChatShell();
+
+  const thread   = byId("aiChat");
+  const chatForm = byId("chatForm");
+  if (!thread || !chatForm) return;
+
+  // Already initialized guard
+  if (chatForm.dataset.aiBound) return;
+  chatForm.dataset.aiBound = "true";
+
+  // ── Welcome message ───────────────────────────────────────────────────────
+  thread.innerHTML = "";
+  aiChatHistory = [];
+
+  const welcomeDiv = document.createElement("div");
+  welcomeDiv.className = "ai-welcome";
+  welcomeDiv.innerHTML = `
+    <div style="text-align:center; padding: 32px 16px;">
+      <div style="font-size: 3rem; margin-bottom: 12px;">🤖</div>
+      <h3 style="margin:0 0 8px; font-size: 1.3rem;">ERTH AI Assistant</h3>
+      <p style="color: var(--muted); margin: 0 0 24px; font-size: 0.9rem; max-width: 440px; margin: 0 auto 24px;">
+        Ask me anything about trips, billing, employees, or routes — I query your live database to answer.
+      </p>
+      <div class="ai-quick-questions">
+        ${QUICK_QUESTIONS.map(q => `<button class="ai-quick-btn" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}
+      </div>
+    </div>
+  `;
+  thread.appendChild(welcomeDiv);
+
+  // ── Quick question buttons ────────────────────────────────────────────────
+  thread.addEventListener("click", (e) => {
+    const btn = e.target.closest(".ai-quick-btn");
+    if (!btn) return;
+    const q = btn.dataset.q;
+    // Remove welcome card
+    welcomeDiv.remove();
+    sendAiMessage(q);
+  });
+
+  // ── Form submit ───────────────────────────────────────────────────────────
+  chatForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const ta = chatForm.querySelector("textarea");
+    const question = ta.value.trim();
+    if (!question) return;
+    ta.value = "";
+    ta.style.height = "auto";
+    welcomeDiv.remove();
+    await sendAiMessage(question);
+  });
+
+  // Auto-grow textarea
+  const ta = chatForm.querySelector("textarea");
+  if (ta) {
+    ta.addEventListener("input", () => {
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+    });
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.dispatchEvent(new Event("submit"));
+      }
+    });
+  }
 }
+
+async function sendAiMessage(question) {
+  const thread   = byId("aiChat");
+  const sendBtn  = document.querySelector("#chatForm button[type=submit]");
+
+  // Render user bubble
+  renderAiMessage("user", question);
+  aiChatHistory.push({ role: "user", content: question });
+
+  // Disable send while streaming
+  if (sendBtn) sendBtn.disabled = true;
+
+  // Create assistant bubble (streaming placeholder)
+  const assistantDiv = renderAiMessage("assistant", "", true);
+  const textEl = assistantDiv ? assistantDiv.querySelector(".ai-msg-text") : null;
+  let fullText = "";
+
+  try {
+    const token = localStorage.getItem("auth_token");
+    const resp = await fetch("/api/v1/ai/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        question,
+        history: aiChatHistory.slice(-20).filter(m => m.role !== "user" || m.content !== question)
+      })
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: "Unknown error" }));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+
+    // Read SSE stream
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop(); // keep incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (raw === "[DONE]") break;
+
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.token) {
+            fullText += parsed.token;
+            if (textEl) {
+              textEl.innerHTML = formatAiText(fullText) + '<span class="ai-typing-cursor">▍</span>';
+              thread.scrollTop = thread.scrollHeight;
+            }
+          }
+        } catch (_) { /* ignore parse errors */ }
+      }
+    }
+
+    // Final render without cursor
+    if (textEl) textEl.innerHTML = formatAiText(fullText) || "(no response)";
+    aiChatHistory.push({ role: "assistant", content: fullText });
+
+  } catch (err) {
+    if (textEl) {
+      textEl.innerHTML = `<span style="color:var(--danger);">⚠️ ${escapeHtml(err.message)}</span>`;
+    }
+    console.error("AI chat error:", err);
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+    thread.scrollTop = thread.scrollHeight;
+  }
+}
+
+
 
 async function loadAdminMapPage() {
   await loadCurrentUser();

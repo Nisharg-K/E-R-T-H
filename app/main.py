@@ -11,8 +11,12 @@ from fastapi.staticfiles import StaticFiles
 # Core internal utility dependencies
 from app.core.database import users_col, clean_user
 from app.core.auth import get_current_user_from_token, generate_token, validate_employee_email
-from app.routers import analytics, rides, tracking, notification, ride_groups, availability, developer, calendar
+from app.routers import analytics, rides, tracking, notification, ride_groups, availability, developer, calendar, ai_chat
 from app.routers.scheduler import start_scheduler
+
+# Load .env so OPENAI_API_KEY is available to ai_chat
+from dotenv import load_dotenv as _load_dotenv
+_load_dotenv()
 
 _scheduler = None
 
@@ -211,6 +215,7 @@ app.include_router(notification.router)
 app.include_router(ride_groups.router)
 app.include_router(availability.router)
 app.include_router(developer.router)
+app.include_router(ai_chat.router)
 app.include_router(calendar.router)
 
 # --- Static Frontend Serving ---

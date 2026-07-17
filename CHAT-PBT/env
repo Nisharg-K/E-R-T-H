@@ -1,8 +1,0 @@
-# Add your OpenAI API key here:
-OPENAI_API_KEY=sk-QIIcNSRa8ykql307atw0sw
-
-# Model and behavior settings
-OPENAI_MODEL=glm-5
-OPENAI_CONTEXT_WINDOW=200000
-OPENAI_ENABLE_R1_MESSAGES=true
-OPENAI_BASE_URL=http://3.128.65.45:4000/v1
