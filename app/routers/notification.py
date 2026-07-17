@@ -22,11 +22,25 @@ def get_notifications(current_user: dict = Depends(get_current_user_from_token))
         notifications_col
         .find({"recipient_id": uid})
         .sort("created_at", -1)
-        .limit(25)
+        .limit(100)
     )
+    seen_availability = set()
     for item in saved_notifications:
         item.pop("_id", None)
+        if item.get("title") == "Pickup/Drop Availability Updated":
+            # Hide legacy duplicate records created before availability notices
+            # became idempotent, while retaining distinct employee/date updates.
+            key = (
+                item.get("availability_employee_id"),
+                item.get("availability_date"),
+                item.get("message"),
+            )
+            if key in seen_availability:
+                continue
+            seen_availability.add(key)
         notifications.append(item)
+        if len(notifications) >= 26:  # welcome card plus 25 saved notices
+            break
     
     if role == "driver":
         group = ride_groups_col.find_one({"driver_id": uid, "status": {"$ne": "draft"}})
