@@ -170,10 +170,18 @@ async def ws_tracking_watch(websocket: WebSocket):
         # Send the current snapshot immediately on connect (only active cabs)
         cutoff = get_now() - datetime.timedelta(minutes=15)
         active_drivers = get_active_driver_ids()
-        active = list(tracking_col.find({
-            "driver_id": {"$in": active_drivers},
-            "updated_at": {"$gte": cutoff}
-        }))
+        settings = db["system_settings"].find_one({"key": "spoofer"})
+        mocked_drivers = settings.get("mocked_drivers", []) if settings else []
+        query = {
+            "$or": [
+                {"driver_id": {"$in": mocked_drivers}},
+                {
+                    "driver_id": {"$in": active_drivers},
+                    "updated_at": {"$gte": cutoff}
+                }
+            ]
+        }
+        active = list(tracking_col.find(query))
         snapshot = [
             {
                 "driver_id": loc["driver_id"],
@@ -245,10 +253,18 @@ def update_location(payload: LocationUpdate, current_user: dict = Depends(get_cu
 def get_active_tracking(current_user: dict = Depends(get_current_user_from_token)):
     cutoff = get_now() - datetime.timedelta(minutes=15)
     active_drivers = get_active_driver_ids()
-    active_locations = list(tracking_col.find({
-        "driver_id": {"$in": active_drivers},
-        "updated_at": {"$gte": cutoff}
-    }))
+    settings = db["system_settings"].find_one({"key": "spoofer"})
+    mocked_drivers = settings.get("mocked_drivers", []) if settings else []
+    query = {
+        "$or": [
+            {"driver_id": {"$in": mocked_drivers}},
+            {
+                "driver_id": {"$in": active_drivers},
+                "updated_at": {"$gte": cutoff}
+            }
+        ]
+    }
+    active_locations = list(tracking_col.find(query))
     if not active_locations:
         return []
     return [

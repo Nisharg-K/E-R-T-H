@@ -236,6 +236,7 @@ function updateMap(markers) {
     // Live location of all active cabs
     state.markers = markers.map((marker, index) => (
       L.marker(getSeparatedDriverMarkerLatLng(marker, index, markers), {
+        zIndexOffset: 1000,
         driver_id: marker.driver_id,
         driver_name: marker.driver_name,
         cab_number: marker.cab_number,
@@ -266,6 +267,7 @@ function updateMap(markers) {
     // Draw driver self position marker
     if (state.driverLatLng) {
       const driverMarker = L.marker(state.driverLatLng, {
+        zIndexOffset: 1000,
         icon: L.divIcon({
           className: 'driver-marker-icon',
           html: `<div style="background-color: #00ff66; color: #000; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #000; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 0.85rem;">🚕</div>`,
@@ -307,29 +309,27 @@ function updateMap(markers) {
       let activeIndex = pickups.findIndex(p => !passengerBoarded(p.user_id));
       if (activeIndex === -1) activeIndex = pickups.length; // no active pickups, next is office
 
-      // Leg sequence: Driver -> pickup0 -> pickup1 -> ... -> office
+      // Leg sequence starting from current active index: Driver -> next stop -> office
       const legs = [];
       const origin = state.driverLatLng || (pickups.length ? pickups[0].latlng : null);
       if (origin) {
-        // driver to first pickup (or office if none)
         let prev = origin;
-        for (let i = 0; i < pickups.length; i++) {
+        for (let i = activeIndex; i < pickups.length; i++) {
           legs.push({ from: prev, to: pickups[i].latlng, passenger: pickups[i], index: i });
           prev = pickups[i].latlng;
         }
-        // last leg to office
         legs.push({ from: prev, to: officeCoord, passenger: null, index: pickups.length });
       }
 
-      // Draw active leg in yellow and upcoming legs as lighter yellow; skip completed legs
+      // Draw active leg in blue and upcoming legs as lighter blue; skip completed legs
       legs.forEach((leg) => {
         if (leg.index < activeIndex) return; // completed -> do not render
         if (leg.index === activeIndex) {
-          // active leg -> bright yellow
-          drawRoadRouteSegment(leg.from, leg.to, { color: '#FFDE00', weight: 6, opacity: 0.95 }, routeRequestId).catch(() => {});
+          // active leg -> bright blue
+          drawRoadRouteSegment(leg.from, leg.to, { color: '#0078FF', weight: 6, opacity: 0.95 }, routeRequestId).catch(() => {});
         } else {
-          // upcoming legs -> faint yellow
-          drawRoadRouteSegment(leg.from, leg.to, { color: '#FFDE00', weight: 4, opacity: 0.38 }, routeRequestId).catch(() => {});
+          // upcoming legs -> faint blue
+          drawRoadRouteSegment(leg.from, leg.to, { color: '#0078FF', weight: 4, opacity: 0.38 }, routeRequestId).catch(() => {});
         }
       });
 
@@ -339,12 +339,12 @@ function updateMap(markers) {
           drawRoadRoute(pathCoords, routeRequestId).catch(() => {});
         }
       }
-
+      
       // Place passenger markers only for not-boarded passengers (skip green ticks for boarded)
       pickups.forEach((p, idx) => {
         const boarded = passengerBoarded(p.user_id);
         if (boarded) return; // do not render a green tick marker for boarded passengers
-        const pinHtml = `<div style="background-color:#ffcc00;color:#000;width:18px;height:18px;border-radius:9px;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-size:0.7rem;">●</div>`;
+        const pinHtml = `<div style="background-color:#ffcc00;color:#000;width:18px;height:18px;border-radius:9px;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:bold;">${idx + 1}</div>`;
         const marker = L.marker(p.latlng, {
           icon: L.divIcon({ className: 'pickup-marker', html: pinHtml, iconSize: [22,22], iconAnchor: [11,11] }),
         }).addTo(state.map).bindPopup(`<strong>${escapeHtml(p.full_name || 'Passenger')}</strong><br>Not Boarded`);
@@ -395,7 +395,8 @@ function updateMap(markers) {
       // Find current driver's position in active markers using simple math
       const activeDriver = markers.find(m => m.driver_id === ride.assigned_driver_id);
       if (activeDriver) {
-        const driverMarker = L.marker([activeDriver.latitude, activeDriver.longitude], {
+        const driverMarker = L.marker([Number(activeDriver.latitude), Number(activeDriver.longitude)], {
+          zIndexOffset: 1000,
           icon: L.divIcon({
             className: 'driver-marker-icon',
             html: `<div style="background-color: #00ff66; color: #000; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid #000; box-shadow: 0 2px 4px rgba(0,0,0,0.5); font-size: 0.85rem;">🚕</div>`,
@@ -433,20 +434,23 @@ function updateMap(markers) {
           };
           let activeIndex = pickups.findIndex(p => !passengerBoarded(p.user_id));
           if (activeIndex === -1) activeIndex = pickups.length;
-          // construct legs
+          // construct legs starting from current active index
           const legs = [];
           if (origin) {
             let prev = origin;
-            for (let i = 0; i < pickups.length; i++) { legs.push({ from: prev, to: pickups[i].latlng, index: i }); prev = pickups[i].latlng; }
+            for (let i = activeIndex; i < pickups.length; i++) {
+              legs.push({ from: prev, to: pickups[i].latlng, index: i });
+              prev = pickups[i].latlng;
+            }
             legs.push({ from: prev, to: officeCoord, index: pickups.length });
           }
-          // Draw active leg in yellow and upcoming legs as lighter yellow; skip completed legs
+          // Draw active leg in blue and upcoming legs as lighter blue; skip completed legs
           legs.forEach((leg) => {
             if (leg.index < activeIndex) return;
             if (leg.index === activeIndex) {
-              drawRoadRouteSegment(leg.from, leg.to, { color: '#FFDE00', weight: 6, opacity: 0.95 }, routeRequestId).catch(() => {});
+              drawRoadRouteSegment(leg.from, leg.to, { color: '#0078FF', weight: 6, opacity: 0.95 }, routeRequestId).catch(() => {});
             } else {
-              drawRoadRouteSegment(leg.from, leg.to, { color: '#FFDE00', weight: 4, opacity: 0.38 }, routeRequestId).catch(() => {});
+              drawRoadRouteSegment(leg.from, leg.to, { color: '#0078FF', weight: 4, opacity: 0.38 }, routeRequestId).catch(() => {});
             }
           });
           // If employee's ride reached completion, draw the full route and keep it yellow
@@ -488,7 +492,7 @@ async function drawRoadRoute(coordsLatLng, routeRequestId = state.routeRequestId
 
       const routeLayer = L.geoJSON(geojson, {
         style: {
-          color: "#FFDE00",
+          color: "#0078FF",
           weight: 6,
           opacity: 0.9,
           lineJoin: "round",
@@ -514,7 +518,7 @@ async function drawRoadRoute(coordsLatLng, routeRequestId = state.routeRequestId
   if (!routeDrawn) {
     if (routeRequestId !== state.routeRequestId) return;
     const fallbackLine = L.polyline(coordsLatLng, {
-      color: "#FFDE00",
+      color: "#0078FF",
       weight: 5,
       opacity: 0.8,
       dashArray: "8, 12"
@@ -543,7 +547,7 @@ async function drawRoadRouteSegment(fromLatLng, toLatLng, style = {}, routeReque
       const geojson = data.routes[0].geometry;
       const routeLayer = L.geoJSON(geojson, {
         style: {
-          color: style.color || '#FFDE00',
+          color: style.color || '#0078FF',
           weight: style.weight || 6,
           opacity: style.opacity ?? 0.95,
           lineJoin: 'round',
@@ -564,7 +568,7 @@ async function drawRoadRouteSegment(fromLatLng, toLatLng, style = {}, routeReque
 
   if (routeRequestId !== state.routeRequestId) return;
   const fallback = L.polyline([fromLatLng, toLatLng], {
-    color: style.color || '#FFDE00',
+    color: style.color || '#0078FF',
     weight: style.weight || 5,
     opacity: style.opacity ?? 0.9,
     dashArray: style.dashArray || null
@@ -746,7 +750,7 @@ function startTrackingWebSocket() {
         }
       } else if (msg.driver_id) {
         // Single driver location push — merge into current markers
-        const currentMarkers = [...state.activeTrackingMarkers];
+        const currentMarkers = [...(state.activeTrackingMarkers || [])];
         const idx = currentMarkers.findIndex(m => m.driver_id === msg.driver_id);
         if (idx >= 0) currentMarkers[idx] = msg;
         else currentMarkers.push(msg);
