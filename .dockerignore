@@ -1,0 +1,44 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment (never bake this into the image)
+venv/
+.venv/
+env/
+
+# Secrets (set these as Render env vars instead)
+.env
+.env.*
+
+# Dev/test directories not needed in production
+CHAT-PBT/
+Base/
+tests/
+node_modules/
+
+# Git history
+.git/
+.gitignore
+
+# Logs and temp files
+*.log
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Misc files not needed at runtime
+Copy of Data.xlsx
+changelog.txt
+project_context.txt
+walkthrough.md
+package.json
+package-lock.json
