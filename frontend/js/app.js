@@ -2557,7 +2557,7 @@ async function sendAiMessage(question) {
   let fullText = "";
 
   try {
-    const token = localStorage.getItem("auth_token");
+    const token = sessionStorage.getItem("cms-token");
     const resp = await fetch("/api/v1/ai/chat", {
       method: "POST",
       headers: {
@@ -3853,4 +3853,3 @@ async function loadDeveloperPage() {
     }
   });
 }
-

@@ -1480,4 +1480,15 @@ button, input, textarea, select { font: inherit; }
   }
 }
 
+/* Fix for map zoom buttons overlapping UI when scrolled down */
+/* Ensure Leaflet controls are above sticky headers (app-header has z-index: 900) */
+.leaflet-control-container {
+  z-index: 1000; 
+}
 
+/* Ensure map containers establish a stacking context */
+/* This is important for z-index on child elements (like Leaflet controls) to work correctly */
+#liveMap, #pickupMap, #spooferMap, #allEmployeesMap {
+  position: relative; /* Ensure position is set for z-index to take effect */
+  z-index: 1; /* Revert to a lower z-index so the map scrolls under sticky headers */
+}
