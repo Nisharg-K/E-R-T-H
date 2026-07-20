@@ -275,7 +275,8 @@ function updateMap(markers) {
           iconAnchor: [12, 12]
         })
       })
-      .addTo(state.map)
+      .addTo(state.map);
+      state.markers.push(driverMarker); // ← track so cleanup removes it next cycle
     }
 
     if (isRideOn) {
