@@ -2557,12 +2557,11 @@ async function sendAiMessage(question) {
   let fullText = "";
 
   try {
-    const token = sessionStorage.getItem("cms-token");
     const resp = await fetch("/api/v1/ai/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
+        "Authorization": `Bearer ${state.token}`
       },
       body: JSON.stringify({
         question,
