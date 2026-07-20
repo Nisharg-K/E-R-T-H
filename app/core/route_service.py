@@ -22,7 +22,15 @@ def _ordered_stops(
 ) -> list[dict]:
     """Resolve one leg without changing its stored assignment or stop order."""
     stops = []
-    for source in sorted(order, key=lambda item: item.get("order", 0)):
+    # Normalise: items may be plain string user-IDs (from seeded/legacy data)
+    # or the canonical {"user_id": ..., "order": N} dicts.
+    def _normalise(item, idx):
+        if isinstance(item, str):
+            return {"user_id": item, "order": idx}
+        return item
+
+    normalised = [_normalise(item, i) for i, item in enumerate(order)]
+    for source in sorted(normalised, key=lambda item: item.get("order", 0)):
         employee_id = source.get("user_id")
         if not employee_id or availability_by_employee.get(employee_id, {}).get(unavailable_field):
             continue
