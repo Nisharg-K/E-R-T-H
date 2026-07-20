@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from app.core.database import users_col, ride_groups_col, clean_user
 from app.core.auth import get_current_user_from_token
-from app.core.clock import get_now
+from app.core.clock import get_now, get_today_ist
 
 router = APIRouter(prefix="/api/v1/ride-groups", tags=["Ride Groups"])
 
@@ -28,6 +28,8 @@ class RideGroupCreate(BaseModel):
     recurrence_days: Optional[List[str]] = []   # e.g. ["mon","tue","wed","thu","fri"]
     departure_time: Optional[str] = ""           # e.g. "08:30"
     route_type: Optional[str] = "pickup"         # "pickup" or "drop"
+    ride_date: Optional[str] = None
+    ride_reference: Optional[str] = None
 
 class RideGroupUpdate(BaseModel):
     name: Optional[str] = None
@@ -42,6 +44,8 @@ class RideGroupUpdate(BaseModel):
     recurrence_days: Optional[List[str]] = None
     departure_time: Optional[str] = None
     route_type: Optional[str] = None
+    ride_date: Optional[str] = None
+    ride_reference: Optional[str] = None
 
 class PassengerStatusUpdate(BaseModel):
     status: str
@@ -163,6 +167,11 @@ def create_ride_group(payload: RideGroupCreate, current_user: dict = Depends(get
         raise HTTPException(status_code=400, detail="Driver does not exist")
         
     group_id = str(uuid.uuid4())
+    today_date = get_today_ist().isoformat()
+    ride_date_val = payload.ride_date or today_date
+    date_clean = ride_date_val.replace("-", "")
+    ride_ref_val = payload.ride_reference or f"RG-{date_clean}-{group_id[:6].upper()}"
+
     group_doc = {
         "id": group_id,
         "name": payload.name,
@@ -178,6 +187,8 @@ def create_ride_group(payload: RideGroupCreate, current_user: dict = Depends(get
         "recurrence_days": payload.recurrence_days or [],
         "departure_time": payload.departure_time or "",
         "route_type": payload.route_type or "pickup",
+        "ride_date": ride_date_val,
+        "ride_reference": ride_ref_val,
         "created_at": get_now().isoformat()
     }
     
@@ -236,6 +247,17 @@ def update_ride_group(group_id: str, payload: RideGroupUpdate, current_user: dic
         update_data["departure_time"] = payload.departure_time
     if payload.route_type is not None:
         update_data["route_type"] = payload.route_type
+    if payload.ride_date is not None:
+        update_data["ride_date"] = payload.ride_date
+    elif not existing.get("ride_date"):
+        update_data["ride_date"] = get_today_ist().isoformat()
+
+    if payload.ride_reference is not None:
+        update_data["ride_reference"] = payload.ride_reference
+    elif not existing.get("ride_reference"):
+        r_date = update_data.get("ride_date") or existing.get("ride_date") or get_today_ist().isoformat()
+        date_clean = r_date.replace("-", "")
+        update_data["ride_reference"] = f"RG-{date_clean}-{group_id[:6].upper()}"
         
     if update_data:
         ride_groups_col.update_one({"id": group_id}, {"$set": update_data})

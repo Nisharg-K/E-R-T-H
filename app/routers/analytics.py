@@ -115,11 +115,20 @@ def get_billing_ledger(
         
         cost = r.get("total_cost", 150.0)
         total_cost_sum += cost
-        
+
+        r_date = r.get("ride_date")
+        if not r_date or r_date == "(no date)":
+            r_date = str(r.get("created_at", "")).split("T")[0] or get_today_ist().isoformat()
+
+        r_ref = r.get("ride_reference")
+        if not r_ref or r_ref == r.get("id"):
+            clean_date = r_date.replace("-", "") if r_date else "20260720"
+            r_ref = f"RG-{clean_date}-{str(r.get('id', ''))[:6].upper()}"
+
         resolved_records.append({
             "id": r.get("id"),
-            "ride_date": r.get("ride_date") or "(no date)",
-            "ride_reference": r.get("ride_reference", r.get("id")),
+            "ride_date": r_date,
+            "ride_reference": r_ref,
             "name": r.get("name", "Unnamed Route"),
             "driver_name": d_name,
             "cab_number": d_cab,
